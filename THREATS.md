@@ -98,9 +98,9 @@ Status definitions:
 
 **Detection:** Record appropriate denied requests without logging credentials or tokens.
 
-**Verification:** Test requests without credentials and with invalid or expired tokens.
+**Verification:** Test requests without credentials and with invalid or expired tokens. Automated tests in `apps/api/src/auth.test.ts` verify rejection of missing Authorization header (401), non-Bearer or empty Bearer schemes (401), invalid JWT tokens (401), and expired JWT tokens (401).
 
-**Status:** Planned or unverified; the Phase 2 baseline does not demonstrate a complete authentication implementation.
+**Status:** Implemented and verified for Bearer token validation on Express `/api/me` and `/api/auth/me` (Phase 4).
 
 ### T2 — Cross-user document access (IDOR/BOLA)
 
@@ -120,7 +120,7 @@ Status definitions:
 
 **Verification:** Owner A must not access Owner B's document without an explicit valid grant.
 
-**Status:** Planned or unverified.
+**Status:** Planned for Phase 5 (Document and Permission Engine).
 
 ### T3 — Privilege escalation
 
@@ -131,14 +131,14 @@ Status definitions:
 **Impact:** Unauthorized administration or disclosure of documents.
 
 **Mitigations:**
-- Determine roles from trusted server-side data.
-- Restrict role changes to an explicitly authorized workflow.
-- Never accept role assignments from ordinary registration requests.
+- Determine roles from trusted server-side data (`public.users.role`).
+- Restrict role changes to an explicitly authorized administrative workflow.
+- Never accept role assignments from ordinary registration or user requests.
 - Test every role-restricted endpoint.
 
-**Verification:** A viewer must not grant themselves administrative privileges.
+**Verification:** A user must not grant themselves administrative privileges. Automated tests in `apps/api/src/auth.test.ts` verify that client role escalation attempts via request parameters/headers are ignored, and new users are strictly provisioned as `owner`.
 
-**Status:** Planned or unverified.
+**Status:** Implemented and verified for user provisioning and role preservation (Phase 4).
 
 ### T4 — Improper permission grants and revocation
 
@@ -316,9 +316,9 @@ Status definitions:
 - Provide a process for revoking sessions or credentials.
 - Apply appropriate protections to authentication endpoints.
 
-**Verification:** Test disabled accounts, invalidated sessions or tokens, and revoked access.
+**Verification:** Test disabled accounts, invalidated sessions or tokens, and revoked access. Automated tests in `apps/api/src/auth.test.ts` verify that accounts with `is_active = false` in PostgreSQL are rejected with HTTP 403 Forbidden ("Account is deactivated"), and that login attempts do not automatically reactivate them.
 
-**Status:** Planned or unverified.
+**Status:** Implemented and verified for account deactivation enforcement on Express `/api/me` (Phase 4).
 
 ### T13 — Migration errors and excessive database privileges
 

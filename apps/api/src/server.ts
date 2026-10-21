@@ -76,11 +76,13 @@ app.get("/health", async (_req, res) => {
   }
 });
 
+import { authRouter } from "./routes/auth.js";
+
 // ---------------------------------------------------------------------------
-// Placeholder for future route mounting
-// e.g. app.use("/api/auth", authRouter);
-// e.g. app.use("/api/documents", documentsRouter);
+// Authentication & Profile routes
 // ---------------------------------------------------------------------------
+app.use("/api/auth", authRouter);
+app.use("/api", authRouter); // Exposes /api/me as well as /api/auth/me
 
 // ---------------------------------------------------------------------------
 // 404 handler for unknown routes

@@ -186,6 +186,40 @@ These results were reported by the development agent and should be retained with
 
 ---
 
+## Entry 7 — Authentication and User-Schema Alignment (Phase 4)
+
+**Date:** 2026-10-21
+**Task:** Implement Supabase Auth authentication, idempotent user provisioning, role protection, deactivated user enforcement, `/api/me` endpoint, frontend auth flow, and automated test suite.
+
+**Prompt summary:** Implement Phase 4 using Supabase Auth as sole password authentication; validate Bearer tokens in Express using `supabaseAdmin.auth.getUser()`; map verified Supabase UUID to `public.users.id`; prepare local migration for `password_hash`; implement idempotent user provisioning preserving roles and `is_active`; reject inactive accounts; expose `/api/me`; build frontend auth UI; add automated tests for all token and user states.
+
+**AI assistance:**
+- Prepared local migration `supabase/migrations/20261021183000_align_users_supabase_auth.sql` to drop `NOT NULL` on `public.users.password_hash` with default `NULL`.
+- Created `apps/api/src/supabase.ts` for service-role Supabase client management and mock injection in unit tests.
+- Created `apps/api/src/middleware/auth.ts` implementing `requireAuth`: extracts Bearer token, verifies via Supabase Auth, idempotently provisions user into `public.users` via `INSERT ... ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email RETURNING ...`, and blocks inactive accounts (`is_active = false`) with HTTP 403.
+- Created `apps/api/src/routes/auth.ts` and mounted `/api/me` and `/api/auth/me`, returning strictly safe user fields.
+- Implemented frontend client `apps/web/src/lib/supabase.ts` and UI in `apps/web/src/App.tsx` (Sign Up, Sign In, Sign Out, session state listener, and interactive `/api/me` verification).
+- Added comprehensive automated test suite `apps/api/src/auth.test.ts` covering missing token, malformed format, invalid signature, expired token, new user provisioning, inactive account rejection, valid user retrieval, role escalation attempt rejection, and secret omission.
+
+**Developer review and decisions:**
+- Approved using verified Supabase Auth UUID as `public.users.id`.
+- Mandated that client-submitted roles are never accepted and existing roles are never modified during login/provisioning.
+- Mandated that deactivated accounts cannot be reactivated by logging in.
+- Mandated that `password_hash` remains strictly unexposed in API payloads.
+- Verified that local migration is prepared but NOT applied remotely until reviewed.
+
+**Verification:**
+- `npm run typecheck`: Passed cleanly with 0 TypeScript errors across `apps/api` and `apps/web`.
+- `npm run build`: Passed cleanly, producing `apps/api/dist` and `apps/web/dist` production bundles.
+- `npm run test`: Passed cleanly — 20 out of 20 tests passed across `src/server.test.ts` and `src/auth.test.ts`.
+- `npm run db:check`: Confirmed active database connection to Supabase PostgreSQL.
+
+**Outcome:** Phase 4 fully implemented, tested, and documented.
+
+**Commit reference:** Add a real commit hash after committing Phase 4 changes.
+
+---
+
 ## Responsible Use and Verification
 
 AI-generated code, security recommendations, and documentation are treated as proposals requiring developer review.

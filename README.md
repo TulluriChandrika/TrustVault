@@ -101,11 +101,15 @@ trustvault/
 
 ## Security Architecture
 
-### Authentication
+### Authentication & User Provisioning (Phase 4)
 
-**Supabase Auth** is the identity provider. The Express API enforces authorization
-for every protected operation. Authentication endpoints will be implemented in a
-future phase.
+- **Supabase Auth** is the sole identity and password-authentication system.
+- **Backend Verification**: Express verifies Bearer JWT access tokens via `supabaseAdmin.auth.getUser(token)`.
+- **Idempotent User Provisioning**: Authenticated Supabase users are mapped into `public.users` using the verified Supabase Auth UUID as `public.users.id`. Provisioning queries use `ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email`, strictly preserving existing `role` and `is_active` states.
+- **Role Assignment**: Clients cannot assign or elevate roles. New signups receive the default `'owner'` role. Administrator privileges are reserved for backend/DB administration.
+- **Deactivated Account Enforcement**: If `is_active` is `false`, requests are immediately rejected with `403 Forbidden` (`Account is deactivated`). Login attempts alone never reactivate an account.
+- **Protected Endpoints**: `/api/me` and `/api/auth/me` return safe profile attributes (`id`, `email`, `role`, `is_active`, `created_at`) and omit `password_hash` and secrets.
+- **Frontend Flow**: Minimal functional auth in `apps/web` supports account creation, login, session persistence, logout, and token-authenticated profile probing against `/api/me`.
 
 ### Database Access
 
@@ -138,19 +142,15 @@ at the database level.
 |---|---|---|
 | `20261020161206_create_trustvault_schema.sql` | **Applied** (Remote & Local) | Core tables: users, documents, permissions, audit logs, sessions |
 | `20261021100000_security_hardening.sql` | **Pending** (Local only) | RLS policies, append-only audit triggers (including TRUNCATE), updated_at trigger |
+| `20261021183000_align_users_supabase_auth.sql` | **Prepared** (Local only) | Alters `public.users.password_hash` to `DROP NOT NULL DEFAULT NULL` for Supabase Auth |
 
-> **Status verified via `npx supabase migration list` & live schema inspection:** `20261020161206` is recorded as applied to the remote database; `20261021100000` is present locally and pending application/review.
+> **Status note:** `20261020161206` is applied remotely. Migrations `20261021100000` and `20261021183000` are prepared locally and must be reviewed before remote application.
 
 ## Known Limitations
 
-- Frontend application features (document upload, access-control management, audit explorer) are pending; baseline environment is established.
-- Authentication endpoints are not yet built.
-- Document CRUD and file storage are not yet implemented.
-- Rate limiting is in-memory only — not suitable for multi-instance deployments
-  without an external store (e.g., Redis).
-- `THREATS.md` documents 13 identified threat profiles; individual mitigations remain pending implementation and verification.
-- The `users.password_hash` column exists in the schema but is not used by the
-  current Supabase Auth strategy. Compatibility will be resolved in Phase 4.
+- Document CRUD, permission grants/revocations, and file storage are not yet implemented (scheduled for Phase 5).
+- Rate limiting is in-memory only — not suitable for multi-instance deployments without an external store (e.g., Redis).
+- `THREATS.md` documents 13 identified threat profiles; T1, T3, and T12 have been implemented and verified in Phase 4.
 
 ## License
 
