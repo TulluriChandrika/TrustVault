@@ -36,12 +36,11 @@ The subsequent local security-hardening migration defines:
 - A trigger that updates `documents.updated_at`.
 - Triggers that reject row-level updates and deletes on `audit_logs`.
 
-Migration status was checked using `npx supabase migration list` on 2026-10-21:
+Migration status was confirmed using `npx supabase migration list` and verified via direct read-only inspection of remote `information_schema` and `pg_catalog` on 2026-10-21:
 
-- `20261020161206`: recorded as applied remotely.
-- `20261021100000`: present locally but not recorded as applied remotely.
-
-This records migration history, not a complete verification that every live database object matches the SQL files.
+- `20261020161206`: Recorded as applied remotely; verified that all 5 tables (`users`, `documents`, `document_permissions`, `audit_logs`, `sessions`), columns, foreign keys, unique constraints, and indexes exist on the remote database.
+- `20261021100000`: Present locally but not recorded as applied remotely; confirmed that the remote database currently has `rls_enabled: false` on all 5 tables, 0 triggers, and 0 custom functions in `public`.
+- **Database Connection Role**: Direct backend queries via `DATABASE_URL` execute as `postgres` (`usebypassrls: true`), bypassing table RLS. RLS acts as defense-in-depth against direct access via Supabase PostgREST Data API roles (`anon`, `authenticated`).
 
 ## 3. Assets to Protect
 

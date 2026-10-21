@@ -1,22 +1,32 @@
 -- =============================================================================
--- Migration: Security Hardening (Phase 2)
+-- Migration: Security Hardening (Phase 2 / Phase 3)
 -- Purpose:
 --   1. Add updated_at auto-maintenance trigger on documents.
---   2. Enforce append-only semantics on audit_logs.
+--   2. Enforce append-only semantics on audit_logs (blocking UPDATE, DELETE, TRUNCATE).
 --   3. Enable RLS on all application tables as defense-in-depth.
 --
 -- This migration does NOT modify the original schema migration.
 -- It layers security controls on top of the existing tables.
 --
--- Architecture note: All application data access goes through the Express API
--- using a server-side DATABASE_URL connection. RLS policies here act as
--- defense-in-depth — they prevent accidental exposure if the Supabase Data
--- API is ever accessed directly by anon/authenticated roles.
+-- Architecture note on Database Access and RLS:
+--   The Express backend currently connects via direct PostgreSQL TCP (DATABASE_URL)
+--   as the 'postgres' user, which possesses the BYPASSRLS attribute (usebypassrls: true).
+--   Consequently, table-level RLS policies do NOT govern queries issued by the
+--   Express backend; all per-document authorization and role checks MUST be
+--   strictly enforced in Express application code.
 --
--- The users.password_hash column from the original migration is retained for
--- backward compatibility. The intended auth strategy is Supabase Auth for
--- identity. password_hash may be repurposed or dropped in a future migration
--- once the auth integration is fully implemented.
+--   The RLS policies defined here grant access to the 'service_role' database role.
+--   These policies act as defense-in-depth to protect tables if accessed through
+--   the Supabase PostgREST Data API, ensuring that 'anon' and 'authenticated'
+--   roles are blocked by default while administrative scripts or service-role clients
+--   retain access.
+--
+-- Supabase Auth compatibility note:
+--   The users.password_hash column from the original migration remains NOT NULL
+--   in this migration. Because Supabase Auth manages password hashing internally
+--   in auth.users, compatibility between auth.users and public.users (such as
+--   dropping NOT NULL on password_hash or establishing a user-sync trigger)
+--   must be resolved in the Phase 4 schema/auth design before live user ingestion.
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
@@ -41,10 +51,8 @@ CREATE TRIGGER trg_documents_set_updated_at
 -- ---------------------------------------------------------------------------
 -- 2. Trigger: append-only enforcement on audit_logs
 --
---    Prevents UPDATE and DELETE on audit_logs rows from non-superuser roles.
---    The postgres superuser can still override this if absolutely necessary
---    (e.g., GDPR data-deletion), but normal application roles cannot tamper
---    with the audit trail.
+--    Prevents UPDATE, DELETE, and TRUNCATE on audit_logs. The trigger function
+--    raises an unconditional exception on any modification attempt.
 -- ---------------------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION public.deny_audit_log_modification()
@@ -66,23 +74,23 @@ CREATE TRIGGER trg_audit_logs_deny_delete
     FOR EACH ROW
     EXECUTE FUNCTION public.deny_audit_log_modification();
 
+CREATE TRIGGER trg_audit_logs_deny_truncate
+    BEFORE TRUNCATE ON public.audit_logs
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION public.deny_audit_log_modification();
+
 -- ---------------------------------------------------------------------------
 -- 3. Row Level Security — defense-in-depth
 --
---    Strategy: All tables have RLS enabled. Since application data access
---    is routed through the Express API (which connects via a server-side
---    DATABASE_URL, typically the postgres or service_role), we create
---    permissive policies that allow the service_role full access while
---    blocking anon and authenticated roles from direct Data API access.
---
---    If the Supabase Data API is disabled or restricted in the future,
---    these policies still provide a safety net.
+--    Strategy: All tables have RLS enabled. As noted above, direct backend
+--    connections via 'postgres' bypass RLS. These policies define access
+--    for the 'service_role' role under Supabase Data API access and ensure
+--    unauthorized roles (anon, authenticated) are denied direct Data API access.
 -- ---------------------------------------------------------------------------
 
 -- 3a. users
 ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
 
--- Allow the service_role (used by the Express backend) full access.
 CREATE POLICY service_role_all_users
     ON public.users
     FOR ALL

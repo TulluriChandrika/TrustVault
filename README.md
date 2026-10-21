@@ -109,17 +109,21 @@ future phase.
 
 ### Database Access
 
-All application data access goes through the Express backend. The Supabase Data
-API has RLS enabled on all tables as defense-in-depth:
+All application data access goes through the Express backend via direct PostgreSQL
+connection (`DATABASE_URL`), connecting as the `postgres` role (which has `BYPASSRLS`).
+Application-level authorization must be enforced in the Express backend.
 
-- **`service_role`** — full access (used by Express via `DATABASE_URL`)
+Row-Level Security (RLS) policies on all tables provide defense-in-depth for the
+Supabase PostgREST Data API:
+
+- **`service_role`** — full access for administrative and service-role API clients
 - **`anon` / `authenticated`** — blocked from direct table access by default
 
 ### Audit Trail
 
 The `audit_logs` table is protected by database triggers that enforce append-only
-semantics. `UPDATE` and `DELETE` operations on audit records are rejected at the
-database level for non-superuser roles.
+semantics. `UPDATE`, `DELETE`, and `TRUNCATE` operations on audit records are rejected
+at the database level.
 
 ### API Hardening
 
@@ -133,9 +137,9 @@ database level for non-superuser roles.
 | Migration | Status | Purpose |
 |---|---|---|
 | `20261020161206_create_trustvault_schema.sql` | **Applied** (Remote & Local) | Core tables: users, documents, permissions, audit logs, sessions |
-| `20261021100000_security_hardening.sql` | **Pending** (Local only) | RLS policies, audit-log append-only triggers, updated_at trigger |
+| `20261021100000_security_hardening.sql` | **Pending** (Local only) | RLS policies, append-only audit triggers (including TRUNCATE), updated_at trigger |
 
-> **Status verified via `npx supabase migration list`:** `20261020161206` is recorded as applied to the remote database; `20261021100000` is present locally and pending application/review.
+> **Status verified via `npx supabase migration list` & live schema inspection:** `20261020161206` is recorded as applied to the remote database; `20261021100000` is present locally and pending application/review.
 
 ## Known Limitations
 
@@ -144,10 +148,9 @@ database level for non-superuser roles.
 - Document CRUD and file storage are not yet implemented.
 - Rate limiting is in-memory only — not suitable for multi-instance deployments
   without an external store (e.g., Redis).
-- `THREATS.md` is not yet populated.
+- `THREATS.md` documents 13 identified threat profiles; individual mitigations remain pending implementation and verification.
 - The `users.password_hash` column exists in the schema but is not used by the
-  current Supabase Auth strategy. It may be repurposed or dropped in a future
-  migration.
+  current Supabase Auth strategy. Compatibility will be resolved in Phase 4.
 
 ## License
 

@@ -151,7 +151,38 @@ These results were reported by the development agent and should be retained with
 
 **Verification:** The migration-list output showed the initial migration recorded remotely and the security-hardening migration pending at the time of inspection.
 
-**Commit reference:** Add a real commit hash after the corresponding changes are committed.
+**Commit reference:** Commit `37a8300` (Phase 2).
+
+---
+
+## Entry 6 — Database Migration Baseline and Schema Integrity (Phase 3)
+
+**Date:** 2026-10-21
+**Task:** Verify live remote schema against SQL migrations, audit connection privileges, and harden audit-log controls.
+
+**Prompt summary:** Perform read-only verification of local vs remote migration history and database catalogs; evaluate Supabase Auth compatibility, RLS privileges, and audit-log triggers.
+
+**AI assistance:**
+- Queried remote `information_schema` and `pg_catalog` to confirm all 5 tables (`users`, `documents`, `document_permissions`, `audit_logs`, `sessions`) match Migration 1.
+- Confirmed that Migration 2 (`20261021100000`) is pending remotely, with 0 triggers and 0 RLS policies currently on remote tables.
+- Discovered that the Express backend's direct connection (`DATABASE_URL`) connects as user `postgres` with `usebypassrls: true`, meaning RLS does not govern backend queries.
+- Identified that row-level triggers do not intercept `TRUNCATE`, and updated `20261021100000_security_hardening.sql` with a statement-level `BEFORE TRUNCATE` trigger.
+- Corrected architectural comments in the migration and `README.md`.
+
+**Developer review and decisions:**
+- Confirmed migration list (`20261020161206` applied, `20261021100000` pending).
+- Decided to keep `public.users.password_hash NOT NULL` unchanged for Phase 3 and defer Supabase Auth reconciliation to Phase 4.
+- Approved adding the `BEFORE TRUNCATE` trigger to `20261021100000_security_hardening.sql`.
+- Withheld remote migration push (`npx supabase db push`) until Phase 3 review is complete.
+
+**Verification:**
+- Live read-only schema queries confirmed exact match with Migration 1.
+- `git diff --check` passed on migration and documentation files.
+- `npm run check` and `npm run db:check` passed cleanly.
+
+**Outcome:** Verified database baseline and prepared hardened security migration.
+
+**Commit reference:** Add a real commit hash after committing Phase 3 changes.
 
 ---
 
