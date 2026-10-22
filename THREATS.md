@@ -221,28 +221,39 @@ Status definitions:
 
 **Asset:** Evidence of access, sharing, and security incidents.
 
-**Threat:** An attacker or overly privileged application role modifies, deletes, or truncates audit records.
+**Threat:** An attacker or overly privileged application role modifies, deletes, or truncates audit records, or unauthorized users view audit history.
 
-**Impact:** Loss of accountability and concealment of unauthorized activity.
-
-**Existing migration design:**
-- The local security-hardening migration defines row-level triggers that reject `UPDATE` and `DELETE` operations on `audit_logs`.
-- That migration is not recorded as applied remotely in the latest migration-list output.
-
-**Limitations:**
-- Row-level `UPDATE` and `DELETE` triggers do not prevent `TRUNCATE`.
-- A database superuser or sufficiently privileged administrator may bypass ordinary protections.
-- Append-only triggers do not by themselves provide cryptographic tamper evidence.
+**Impact:** Loss of accountability, unauthorized intelligence gathering, and concealment of unauthorized activity.
 
 **Mitigations:**
-- Review and apply appropriate database privileges.
-- Explicitly restrict `TRUNCATE` and unnecessary table privileges.
-- Restrict audit retrieval to authorized roles.
-- Consider tamper-evident integrity verification and an independently protected checkpoint if required.
+- **Endpoint immutability:** The API exposes strictly read-only endpoints (`GET /api/admin/audit-logs`, `GET /api/admin/audit-logs/:id`). No `POST`, `PUT`, `PATCH`, or `DELETE` endpoints exist for audit logs (returning `404 Not Found`).
+- **Strict administrative role enforcement:** `requireAdmin` verifies `req.user.role === 'admin'` strictly from server-side database records. Document owners, editors, and viewers are blocked with `403 Forbidden`.
+- **Denied administrative access auditing:** Unauthorized administrative audit access attempts generate a standalone denied audit log entry (`action: "audit_log:read"`, `outcome: "denied"`) preserving the actor's ID and attempt metadata.
+- **Database append-only triggers:** Local migration `20261021100000_security_hardening.sql` defines row-level `BEFORE UPDATE`, `BEFORE DELETE`, and statement-level `BEFORE TRUNCATE` triggers on `public.audit_logs` that raise unconditional PostgreSQL exceptions.
+- **Transactional audit atomicity:** All mutating business operations (`document:create`, `document:update`, `document:delete`, `permission:grant`, `permission:revoke`) write their audit logs inside the same SQL transaction client. Failure to persist the audit log causes the entire transaction to roll back, guaranteeing no mutation persists without an audit trail.
+- **Bounded and parameterized queries:** Administrative audit queries strictly validate inputs and pass parameters using parameterized SQL placeholders (`$1`, `$2`), eliminating SQL injection. Queries enforce bounded pagination (max 100 records per page) and deterministic ordering (`ORDER BY created_at DESC, id DESC`).
+- **Privacy and sanitization:** Responses project only safe attributes (`id`, `actor_id`, `document_id`, `action`, `outcome`, `details`, `created_at`). Secrets, password hashes, and tokens are strictly excluded.
+- **Query performance indexing:** Local migration `20261022180000_audit_logs_actor_idx.sql` defines an index on `(actor_id, created_at DESC)` to optimize administrative filtering by actor alongside the existing created_at and document_id indexes.
 
-**Verification:** Test unauthorized updates, deletes, truncation attempts, and audit retrieval permissions in a disposable test database.
+**Limitations:**
+- **Standalone audit persistence failure window:** Standalone audit records (e.g. read denials, connection aborts) attempt to insert via `pool.query`. If PostgreSQL is offline, network partitioned, or experiencing storage exhaustion, the insert will fail. Standalone errors are caught and logged to stderr to avoid crashing the server process or recursing, but the audit entry cannot be guaranteed to persist during a database outage.
+- **Direct database access:** Append-only triggers protect against application queries, but direct access by a PostgreSQL superuser can disable triggers or alter tables directly.
+- **Remote migration status:** Security triggers in `20261021100000` and the actor index in `20261022180000` are prepared locally and must be reviewed before remote application.
 
-**Status:** Partially designed; remote deployment and effective protection remain unverified.
+**Verification:** Automated unit tests in `apps/api/src/audit.test.ts` (29 tests) verify:
+1. 401 rejection for unauthenticated requests across all audit endpoints.
+2. 403 rejection and denied audit log generation for non-admin roles (`owner`, `viewer`).
+3. Rejection of client-supplied role escalation attempts via headers, queries, and bodies.
+4. 200 retrieval of audit log lists and individual log entries for verified administrators.
+5. Strict validation of pagination bounds (`limit` 1..100, `offset` >= 0) and filter parameters (`actor_id`, `document_id`, `action`, `outcome`, `start_date`, `end_date`).
+6. Parameterized query construction preventing SQL injection payloads from modifying query structure.
+7. 404 rejection for non-existent audit IDs and 400 for malformed numeric IDs.
+8. Immutability of endpoints against POST, PUT, PATCH, and DELETE requests (404).
+9. Omission of sensitive credentials, password hashes, and tokens in audit responses.
+10. Safe trapping of standalone persistence failures without crashing or recursing.
+11. Proper propagation of transactional audit failures to ensure rollback.
+
+**Status:** Implemented and verified in Phase 7 for API access controls, immutability, query validation, and failure handling; database triggers and indexing remain local pending migration review.
 
 ### T8 — SQL injection
 

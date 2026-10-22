@@ -440,7 +440,56 @@ These results were reported by the development agent and should be retained with
 
 **Outcome:** All CodeRabbit review findings fully resolved, tested, and verified.
 
-**Commit reference:** Add a real commit hash after committing Phase 6 changes.
+**Commit reference:** Committed in `94e66cf` (`feat: complete secure document lifecycle`).
+
+---
+
+## Entry 13 — Phase 7: Audit Trail Integrity and Administrative Audit APIs
+
+**Date:** 2026-10-22
+**Task:** Implement Phase 7: Audit Trail Integrity and Administrative Audit APIs:
+1. Enforce strict administrative access control on administrative endpoints.
+2. Provide list and detail endpoints for audit logs with validated pagination, multi-attribute filtering, and parameterized SQL.
+3. Ensure immutability of audit records at application and database layers.
+4. Distinguish transactional audit logging from standalone audit logging and document persistence failure boundaries.
+5. Create local indexing migration for query performance without applying remotely.
+6. Add comprehensive automated tests and update security documentation.
+
+**AI assistance:**
+- Created `apps/api/src/middleware/admin.ts`:
+  - Enforces `req.user.role === 'admin'` from verified server-side user record.
+  - Ignores client-supplied role claims (headers, body, query).
+  - Emits standalone denied audit log (`action: "audit_log:read"`, `outcome: "denied"`) when non-admins attempt access.
+  - Traps audit write failures safely to prevent crashing or recursive logging.
+- Created `apps/api/src/routes/adminAudit.ts`:
+  - `GET /api/admin/audit-logs`: supports bounded pagination (`limit` 1..100, `offset` >= 0), validated filters (`actor_id`, `document_id`, `action`, `outcome`, `start_date`, `end_date`), parameterized count and data queries, and deterministic ordering (`ORDER BY created_at DESC, id DESC`).
+  - `GET /api/admin/audit-logs/:id`: validates numeric identifier, returns `404 Not Found` for missing events, and projects safe audit fields (`id`, `actor_id`, `document_id`, `action`, `outcome`, `details`, `created_at`).
+  - Immutability: exposes no POST, PUT, PATCH, or DELETE routes (returns 404).
+- Mounted router in `apps/api/src/server.ts` under `/api/admin/audit-logs`.
+- Created local migration `supabase/migrations/20261022180000_audit_logs_actor_idx.sql` adding `CREATE INDEX IF NOT EXISTS audit_logs_actor_idx ON public.audit_logs(actor_id, created_at DESC)`.
+- Created `apps/api/src/audit.test.ts` with 44 automated tests.
+- Updated `README.md` and `THREATS.md` (T7, T3).
+
+**Developer review and decisions:**
+- Resolved TypeScript error in `apps/api/src/routes/adminAudit.ts` where `req.params.id` can be typed as `string | string[]` in Express 5 by normalizing to string before regex validation.
+- Corrected test mock lifecycle in `apps/api/src/audit.test.ts` so `mockAuthAs` is called before each individual HTTP probe in multi-request immutability assertions.
+- Clearly differentiated between transactional audit persistence (coupled in the same transaction as business mutations; rolls back if audit fails) and standalone audit persistence (standalone `pool.query` write; catches errors to stderr to prevent crashing the response or recursing).
+- Explicitly documented that append-only triggers protect against application-level modification but do not prevent PostgreSQL superuser alterations or guarantee audit availability if PostgreSQL is offline.
+- **CodeRabbit Review Remediation (Phase 7):**
+  1. *Validated `offset` as a safe integer:* Restricted offset to canonical non-negative integer representation (`/^(0|[1-9]\d*)$/`), capped at `Number.MAX_SAFE_INTEGER` (`9007199254740991`) using digit-length guards and `BigInt` bounds checks, and verified `Number.isSafeInteger(offset) && offset >= 0`. Rejects unsafe integers, decimals, leading zeros, and long digit strings with HTTP 400 before executing database queries.
+  2. *Validated audit log ID against PostgreSQL BIGINT bounds:* Enforced canonical decimal integer pattern (`/^[1-9]\d*$/`), rejecting zero, leading-zero representations, negative values, and non-numeric inputs. Enforced PostgreSQL signed 64-bit BIGINT maximum (`9223372036854775807n`) before querying the database, while preserving valid IDs as strings to prevent precision loss.
+  3. *Restored `## Known Limitations` in `README.md`:* Restored the complete Known Limitations section covering in-flight revocation, cross-system storage atomicity/orphaned objects, interrupted stream auditing, database outage audit failure windows, in-memory rate limiting, and unit test mock isolation.
+
+**Verification:**
+- `npm run check`: Exited with code `0`.
+  - Typecheck: passed across `@trustvault/api` and `@trustvault/web`.
+  - Production build: passed across `@trustvault/api` and `@trustvault/web`.
+  - Automated tests: **149 total tests passed** (12 auth tests, 10 server tests, 83 documents tests, 44 audit tests).
+  - All database client queries in tests are isolated unit tests using Vitest and Supertest with mocked pg pool.
+
+**Outcome:** Phase 7 implemented, CodeRabbit findings resolved, tested, and verified.
+
+**Commit reference:** Pending user review and manual commit.
 
 ---
 

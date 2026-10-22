@@ -78,6 +78,7 @@ app.get("/health", async (_req, res) => {
 
 import { authRouter } from "./routes/auth.js";
 import { documentsRouter } from "./routes/documents.js";
+import { adminAuditRouter } from "./routes/adminAudit.js";
 
 // ---------------------------------------------------------------------------
 // Authentication & Profile routes
@@ -89,6 +90,11 @@ app.use("/api", authRouter); // Exposes /api/me as well as /api/auth/me
 // Document & Permission routes (Phase 5)
 // ---------------------------------------------------------------------------
 app.use("/api/documents", documentsRouter);
+
+// ---------------------------------------------------------------------------
+// Administrative Audit routes (Phase 7)
+// ---------------------------------------------------------------------------
+app.use("/api/admin/audit-logs", adminAuditRouter);
 
 // ---------------------------------------------------------------------------
 // 404 handler for unknown routes

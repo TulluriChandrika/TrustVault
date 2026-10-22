@@ -160,6 +160,42 @@ trustvault/
   - Response stream lifecycle tracking: completed byte writes are audited on `finish`, while aborted client connections are audited on `close` as transfer failures. An in-memory guard prevents duplicate audit attempts per request lifecycle; database write failures are caught and logged safely without crashing the response.
   - Because downloads are backend-mediated on every request, permission revocation takes effect immediately on subsequent requests.
 
+- **Threat model verification:** `THREATS.md` documents 13 identified threat profiles; T1, T2, T3, T4, T5, T6, T7, and T12 have been implemented and verified.
+
+### Administrative Audit APIs & Audit Trail Integrity (Phase 7)
+
+- **Strict Administrative Access Control**:
+  - Enforced via `requireAdmin` middleware. Access is granted strictly when trusted server-side profile `req.user.role === 'admin'`.
+  - Client-supplied role claims (headers, body, query parameters) are ignored.
+  - Document owners, editors, and viewers are blocked with `403 Forbidden` (`Only administrators can access audit logs`).
+  - Unauthenticated requests are blocked with `401 Unauthorized`.
+  - Non-admin access attempts generate a standalone denied audit log entry (`action: "audit_log:read"`, `outcome: "denied"`) recording the actor's ID and access metadata.
+- **Audit Immutability & Anti-Tampering**:
+  - Audit records cannot be modified or deleted via ordinary API endpoints (no `POST`, `PUT`, `PATCH`, or `DELETE` routes exist).
+  - Database triggers (`trg_audit_logs_deny_update`, `trg_audit_logs_deny_delete`, `trg_audit_logs_deny_truncate`) unconditionally block row modifications and table truncation in PostgreSQL.
+- **Attempted vs. Persisted Audit Distinction**:
+  - *Transactional mutations*: Document creation, updates, deletions, and permission grant/revoke operations execute their business write and audit entry inside the same PostgreSQL transaction client. If audit insertion fails, the entire transaction rolls back, preventing untracked state changes.
+  - *Standalone events*: Read denials, file transfer lifecycle events, and denied administrative access attempts are recorded via standalone queries. While the server attempts to record these events, persistence cannot be guaranteed if PostgreSQL is offline or unreachable. Standalone failures are trapped and written to stderr to avoid crashing the server or recursing.
+- **Endpoints**:
+  - `GET /api/admin/audit-logs` — List audit logs with bounded pagination and validated filters:
+    - `limit`: records per page (1 to 100, default 50).
+    - `offset`: records to skip (non-negative integer, default 0).
+    - `actor_id`: filter by actor UUID.
+    - `document_id`: filter by target document UUID.
+    - `action`: filter by exact action string (1 to 100 characters).
+    - `outcome`: filter by `success`, `denied`, or `failure`.
+    - `start_date`: filter records created on or after ISO 8601 timestamp.
+    - `end_date`: filter records created on or before ISO 8601 timestamp.
+    - Deterministic ordering: `ORDER BY created_at DESC, id DESC`.
+    - Returns `{ audit_logs: [...], pagination: { total, limit, offset, has_more } }`.
+  - `GET /api/admin/audit-logs/:id` — Retrieve an individual audit log by ID:
+    - Validates positive integer identifier format (returns `400 Bad Request` if malformed).
+    - Returns `404 Not Found` if missing.
+    - Returns `{ audit_log: { id, actor_id, document_id, action, outcome, details, created_at } }`.
+- **Privacy & Sanitization**:
+  - Audit queries select only safe fields (`id`, `actor_id`, `document_id`, `action`, `outcome`, `details`, `created_at`).
+  - Password hashes, access tokens, and storage credentials are never stored in audit details or returned in responses.
+
 ### Database Access
 
 All application data access goes through the Express backend via direct PostgreSQL
@@ -193,18 +229,22 @@ at the database level.
 | `20261020161206_create_trustvault_schema.sql` | **Applied** (Remote & Local) | Core tables: users, documents, permissions, audit logs, sessions |
 | `20261021100000_security_hardening.sql` | **Pending** (Local only) | RLS policies, append-only audit triggers (including TRUNCATE), updated_at trigger |
 | `20261021183000_align_users_supabase_auth.sql` | **Prepared** (Local only) | Alters `public.users.password_hash` to `DROP NOT NULL DEFAULT NULL` for Supabase Auth |
+| `20261022180000_audit_logs_actor_idx.sql` | **Prepared** (Local only) | Adds index on `(actor_id, created_at DESC)` for administrative audit query optimization |
 
-> **Status note:** `20261020161206` is applied remotely. Migrations `20261021100000` and `20261021183000` are prepared locally and must be reviewed before remote application.
+> **Status note:** `20261020161206` is applied remotely. Migrations `20261021100000`, `20261021183000`, and `20261022180000` are prepared locally and must be reviewed before remote application. Do not apply migrations to production or remote databases without explicit review.
 
 ## Known Limitations
 
-- **In-flight revocation boundary:** In-flight download streams already in transit across network sockets during revocation cannot be recalled; however, any subsequent request is immediately denied on the server.
-- **Cross-system atomicity limitation:** PostgreSQL transactions and cloud object storage do not share a distributed two-phase commit (2PC). If the database transaction fails and the compensating storage `remove()` call also fails (e.g. due to a network partition), an unreferenced object will remain in private storage.
-- **Audit tracking on aborted streams:** Downloads track the response `finish` and `close` events; client disconnects or aborted connections before completion are audited as transfer failures (`client_disconnected_or_transfer_interrupted`), preventing partial transfers from being falsely recorded as completed downloads.
-- **Audit persistence during database errors:** In-memory lifecycle deduplication (`downloadAuditRecorded`) ensures the application initiates at most one download audit attempt per request, but successful persistence in PostgreSQL cannot be guaranteed if the database is offline or the insert fails. In accordance with the standalone audit policy, such failures are safely logged to stderr to avoid crashing the server process or interrupting the client download.
-- **Test isolation scope:** Automated test suites (`auth.test.ts`, `server.test.ts`, `documents.test.ts`) are isolated in-memory unit tests using Vitest and Supertest with mocked database and storage clients. Production readiness requires live end-to-end integration testing against real Supabase and PostgreSQL infrastructure.
-- **In-memory rate limiting:** Rate limiting is in-memory only — not suitable for multi-instance deployments without an external distributed store (e.g., Redis).
-- **Threat model verification:** `THREATS.md` documents 13 identified threat profiles; T1, T2, T3, T4, T5, T6, and T12 have been implemented and verified.
+- **In-flight permission revocation during active downloads:** If a file download is already in transit across open network sockets when permissions are revoked, bytes already sent cannot be recalled over the wire. However, all subsequent requests and new download attempts are denied immediately on the backend.
+- **Cross-system atomicity & orphaned storage objects:** PostgreSQL transactions and cloud object storage do not share a distributed two-phase commit (2PC). If a database transaction fails and the compensating storage `remove()` call also fails (e.g. due to an external network partition or storage provider downtime), an unreferenced file object may remain in private storage.
+- **Interrupted download stream auditing:** Downloads track HTTP response `finish` and `close` stream lifecycle events. If a client disconnects or aborts the connection mid-transfer before completion, the server audits the event as a transfer failure (`client_disconnected_or_transfer_interrupted`), preventing partial transfers from being falsely recorded as completed downloads.
+- **Audit persistence failures during database outages:** 
+  - *Transactional mutations*: Business mutations (create, update, delete, grant, revoke) write their audit entry inside the same database transaction. If the audit insert fails, the transaction rolls back, guaranteeing no business mutation persists without an audit trail.
+  - *Standalone events*: Standalone events (read denials, file transfer interruptions, denied administrative access attempts) are inserted via `pool.query`. If PostgreSQL is offline, unreachable, or suffering storage exhaustion, standalone audit entries cannot be persisted. These errors are caught and logged to `stderr` to prevent crashing the server process or recursing.
+- **In-memory rate limiting across processes/restarts:** Rate limiting is managed in-memory using `express-rate-limit`, which resets on process restart and is not shared across multi-process clusters or container replicas without an external distributed store (such as Redis).
+- **Automated test isolation scope:** Automated test suites (`auth.test.ts`, `server.test.ts`, `documents.test.ts`, `audit.test.ts`) are isolated in-memory unit tests using Vitest and Supertest with mocked database and storage clients. Production readiness requires live end-to-end integration testing against real Supabase and PostgreSQL infrastructure.
+- **PostgreSQL superuser access:** Append-only database triggers (`trg_audit_logs_deny_update`, `trg_audit_logs_deny_delete`, `trg_audit_logs_deny_truncate`) protect audit history against application roles, but direct access by a PostgreSQL superuser can alter triggers or tables directly.
+- **Threat model verification:** `THREATS.md` documents 13 identified threat profiles; T1, T2, T3, T4, T5, T6, T7, and T12 have been implemented and verified. For complete threat analysis, see [THREATS.md](THREATS.md).
 
 ## License
 
