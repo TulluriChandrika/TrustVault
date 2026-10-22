@@ -1,20 +1,82 @@
 import { Router, Request, Response } from "express";
 import crypto from "crypto";
+import multer from "multer";
+import { PoolClient } from "pg";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../middleware/auth.js";
 import { recordAuditLog } from "../audit.js";
-import { isValidUUID, sanitizeString } from "../utils/validation.js";
+import { getSupabaseAdmin } from "../supabase.js";
+import {
+  isValidUUID,
+  sanitizeString,
+  sanitizeFilename,
+  buildContentDisposition,
+  validateFileContent,
+  MAX_FILE_SIZE_BYTES,
+  MULTIPART_LIMITS,
+} from "../utils/validation.js";
 
 export const documentsRouter = Router();
 
 // Enforce Phase 4 authentication on all document routes
 documentsRouter.use(requireAuth);
 
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: MULTIPART_LIMITS,
+});
+
+function handleUploadMiddleware(req: Request, res: Response, next: (err?: any) => void) {
+  const contentType = req.headers["content-type"] || "";
+  if (contentType.includes("multipart/form-data")) {
+    upload.single("file")(req, res, (err: any) => {
+      if (err) {
+        if (err instanceof multer.MulterError) {
+          switch (err.code) {
+            case "LIMIT_FILE_SIZE":
+              res.status(413).json({
+                error: `File size exceeds the maximum allowed limit of ${MAX_FILE_SIZE_BYTES / (1024 * 1024)}MB`,
+              });
+              return;
+            case "LIMIT_FIELD_VALUE":
+              res.status(413).json({ error: "Field value exceeds maximum allowed size" });
+              return;
+            case "LIMIT_FILE_COUNT":
+            case "LIMIT_UNEXPECTED_FILE":
+              res.status(400).json({
+                error: "Exactly one file upload is permitted under form field 'file'",
+              });
+              return;
+            case "LIMIT_FIELD_COUNT":
+              res.status(400).json({ error: "Too many form fields provided" });
+              return;
+            case "LIMIT_PART_COUNT":
+              res.status(400).json({ error: "Too many multipart parts provided" });
+              return;
+            case "LIMIT_FIELD_KEY":
+              res.status(400).json({ error: "Form field name is too long" });
+              return;
+            default:
+              res.status(400).json({ error: `Multipart upload error: ${err.message}` });
+              return;
+          }
+        }
+        res.status(400).json({ error: "Malformed multipart form data" });
+        return;
+      }
+      next();
+    });
+  } else {
+    next();
+  }
+}
+
 interface DocumentRow {
   id: string;
   owner_id: string;
   title: string;
   category: string;
+  storage_key: string;
   mime_type: string;
   size_bytes: string | number;
   created_at: string;
@@ -37,6 +99,7 @@ async function getDocumentWithAccess(
       d.owner_id,
       d.title,
       d.category,
+      d.storage_key,
       d.mime_type,
       d.size_bytes,
       d.created_at,
@@ -100,100 +163,373 @@ documentsRouter.get("/", async (req: Request, res: Response): Promise<void> => {
 
 /**
  * POST /api/documents
- * Create document metadata owned by the authenticated user.
- * Note: Phase 5 is metadata-only; actual file upload/storage belongs to Phase 6.
+ * Create document with real private object storage upload (multipart/form-data)
+ * or metadata-only (JSON body for backwards compatibility).
  */
-documentsRouter.post("/", async (req: Request, res: Response): Promise<void> => {
-  const userId = req.user!.id;
-  const body = req.body || {};
+documentsRouter.post(
+  "/",
+  handleUploadMiddleware,
+  async (req: Request, res: Response): Promise<void> => {
+    const userId = req.user!.id;
+    const body = req.body || {};
 
-  // Reject client-supplied immutable or internal fields
-  const forbiddenFields = [
-    "id",
-    "owner_id",
-    "storage_key",
-    "created_at",
-    "updated_at",
-    "deleted_at",
-  ];
-  for (const field of forbiddenFields) {
-    if (field in body) {
-      res.status(400).json({ error: `Field '${field}' cannot be specified by client` });
+    // Reject client-supplied immutable or internal fields
+    const forbiddenFields = [
+      "id",
+      "owner_id",
+      "storage_key",
+      "created_at",
+      "updated_at",
+      "deleted_at",
+    ];
+    for (const field of forbiddenFields) {
+      if (field in body) {
+        res.status(400).json({ error: `Field '${field}' cannot be specified by client` });
+        return;
+      }
+    }
+
+    const category = sanitizeString(body.category);
+    if (!category || category.length < 1 || category.length > 100) {
+      res.status(400).json({ error: "Category is required and must be between 1 and 100 characters" });
       return;
     }
+
+    const isMultipart = (req.headers["content-type"] || "").includes("multipart/form-data");
+    if (isMultipart && !req.file) {
+      res.status(400).json({ error: "File is required for multipart file uploads" });
+      return;
+    }
+
+    // Branch A: Real file upload via multipart/form-data
+    if (req.file) {
+      const fileValidation = validateFileContent(req.file.buffer, req.file.mimetype);
+      if (!fileValidation.isValid) {
+        await recordAuditLog({
+          actorId: userId,
+          documentId: null,
+          action: "file:upload",
+          outcome: "denied",
+          details: { reason: fileValidation.error, originalname: req.file.originalname },
+        });
+        res.status(400).json({ error: fileValidation.error });
+        return;
+      }
+
+      let title = sanitizeString(body.title);
+      if (!title) {
+        title = sanitizeFilename(req.file.originalname);
+      }
+      if (!title || title.length < 1 || title.length > 200) {
+        res.status(400).json({ error: "Title is required and must be between 1 and 200 characters" });
+        return;
+      }
+
+      // Generate unpredictable server-side storage key
+      const storageKey = `private/${userId}/${crypto.randomUUID()}.${fileValidation.extension}`;
+      const bucketName = process.env.STORAGE_BUCKET_NAME || "trustvault-private";
+      const supabase = getSupabaseAdmin();
+
+      // Step 1: Upload to private storage
+      const { error: storageError } = await supabase.storage
+        .from(bucketName)
+        .upload(storageKey, req.file.buffer, {
+          contentType: fileValidation.detectedMimeType,
+          upsert: false,
+        });
+
+      if (storageError) {
+        console.error("Storage upload failed:", storageError);
+        await recordAuditLog({
+          actorId: userId,
+          documentId: null,
+          action: "file:upload",
+          outcome: "failure",
+          details: { reason: "storage_provider_error", message: storageError.message },
+        });
+        res.status(500).json({ error: "Failed to store file in object storage" });
+        return;
+      }
+
+      // Step 2: Database transaction with compensating cleanup on any failure
+      let uploadCommitted = false;
+      let commitAttempted = false;
+      let client: PoolClient | null = null;
+      let clientReleased = false;
+      let insertedDocId: string | null = null;
+
+      const releaseClient = (destroy?: Error | boolean) => {
+        if (client && !clientReleased) {
+          clientReleased = true;
+          try {
+            client.release(destroy);
+          } catch (relErr: unknown) {
+            console.error("Error releasing database client:", relErr);
+          }
+        }
+      };
+
+      try {
+        client = await pool.connect();
+        await client.query("BEGIN");
+
+        const insertQuery = `
+          INSERT INTO public.documents (owner_id, title, category, storage_key, mime_type, size_bytes)
+          VALUES ($1, $2, $3, $4, $5, $6)
+          RETURNING id, owner_id, title, category, mime_type, size_bytes, created_at, updated_at;
+        `;
+
+        const result = await client.query(insertQuery, [
+          userId,
+          title,
+          category,
+          storageKey,
+          fileValidation.detectedMimeType,
+          req.file.size,
+        ]);
+
+        const createdDoc = result.rows[0];
+        insertedDocId = createdDoc.id;
+
+        await recordAuditLog({
+          actorId: userId,
+          documentId: createdDoc.id,
+          action: "file:upload",
+          outcome: "success",
+          details: {
+            title,
+            category,
+            mime_type: fileValidation.detectedMimeType,
+            size_bytes: req.file.size,
+          },
+          client,
+        });
+
+        commitAttempted = true;
+        await client.query("COMMIT");
+        uploadCommitted = true;
+        releaseClient(); // Healthy release back to pool upon successful commit
+
+        res.status(201).json({
+          document: {
+            ...createdDoc,
+            access_level: "owner",
+          },
+        });
+      } catch (postUploadErr: unknown) {
+        console.error(
+          "Database insert or transaction failed after storage upload; initiating compensating reconciliation:",
+          postUploadErr instanceof Error ? postUploadErr.message : "Unknown error"
+        );
+
+        // 1. Attempt rollback on the client connection if not committed
+        let rollbackSucceeded = false;
+        if (client && !uploadCommitted) {
+          try {
+            await client.query("ROLLBACK");
+            rollbackSucceeded = true;
+          } catch (rollbackErr: unknown) {
+            rollbackSucceeded = false;
+            console.error(
+              "Transactional rollback failed after error:",
+              rollbackErr instanceof Error ? rollbackErr.message : "Unknown error"
+            );
+          }
+        }
+
+        // Finding 1: Release or discard the original transaction client BEFORE running reconciliation queries
+        // on the pool to avoid connection starvation or deadlocks in limited connection pools.
+        // If rollback failed or an error occurred on the connection, pass error/true to discard it from the pool.
+        const shouldDiscardClient = !rollbackSucceeded || !uploadCommitted;
+        releaseClient(shouldDiscardClient ? (postUploadErr instanceof Error ? postUploadErr : true) : undefined);
+
+        // 2. Determine transaction commit state across 3 distinct outcomes:
+        // - "uncommitted": Conclusively confirmed that no active database record depends on this storage object.
+        // - "committed": Conclusively confirmed that PostgreSQL committed the document record.
+        // - "unknown": Verification query failed, or zero rows returned when outcome remains uncertain (COMMIT was attempted or ROLLBACK failed).
+        type ReconciliationOutcome = "uncommitted" | "committed" | "unknown";
+        let reconciliationOutcome: ReconciliationOutcome = "unknown";
+
+        if (!insertedDocId) {
+          // If INSERT never returned an ID (e.g. pool.connect failed or INSERT threw),
+          // no database record was ever created or committed.
+          reconciliationOutcome = "uncommitted";
+        } else if (uploadCommitted) {
+          reconciliationOutcome = "committed";
+        } else {
+          try {
+            const checkRes = await pool.query(
+              "SELECT id, deleted_at FROM public.documents WHERE id = $1",
+              [insertedDocId]
+            );
+
+            if (checkRes.rows.length > 0) {
+              reconciliationOutcome = "committed";
+            } else {
+              // Zero rows returned.
+              // Finding 2: Zero rows do NOT prove uncommitted if COMMIT was attempted
+              // or if ROLLBACK failed!
+              // Only when COMMIT was never attempted AND ROLLBACK cleanly succeeded
+              // does a zero-row result provide reliable evidence that the transaction aborted.
+              if (!commitAttempted && rollbackSucceeded) {
+                reconciliationOutcome = "uncommitted";
+              } else {
+                reconciliationOutcome = "unknown";
+                console.error(
+                  `[OPERATIONAL ALERT] Zero rows observed for document ${insertedDocId}, but transaction outcome remains unknown because ${
+                    commitAttempted ? "COMMIT was attempted" : "ROLLBACK failed"
+                  }. Preserving storage object ${storageKey} for manual recovery.`
+                );
+              }
+            }
+          } catch (checkErr: unknown) {
+            reconciliationOutcome = "unknown";
+            console.error(
+              `[OPERATIONAL ALERT] Ambiguous COMMIT verification query failed for document ${insertedDocId}:`,
+              checkErr instanceof Error ? checkErr.message : "Database connection or query error"
+            );
+          }
+        }
+
+        // 3. Compensating action based on conclusive outcome:
+        if (reconciliationOutcome === "uncommitted") {
+          // Conclusively uncommitted: safe to delete orphaned storage object
+          try {
+            await supabase.storage.from(bucketName).remove([storageKey]);
+          } catch (cleanupErr: unknown) {
+            console.error(
+              "Compensating storage cleanup failed for orphaned object:",
+              storageKey,
+              cleanupErr instanceof Error ? cleanupErr.message : "Storage error"
+            );
+          }
+        } else if (reconciliationOutcome === "committed") {
+          // Conclusively committed: execute schema-safe compensating reconciliation via soft-delete
+          // (preserves audit history and referential integrity while hiding from active queries)
+          let dbSoftDeleteSucceeded = false;
+          try {
+            const softDeleteRes = await pool.query(
+              "UPDATE public.documents SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL RETURNING id",
+              [insertedDocId]
+            );
+            if (softDeleteRes.rows.length > 0) {
+              dbSoftDeleteSucceeded = true;
+            }
+          } catch (softDeleteErr: unknown) {
+            console.error(
+              `[OPERATIONAL ALERT] Compensating soft-delete failed for committed document ${insertedDocId}:`,
+              softDeleteErr instanceof Error ? softDeleteErr.message : "Database error"
+            );
+          }
+
+          if (dbSoftDeleteSucceeded) {
+            // Once document is conclusively soft-deleted, storage object can be safely cleaned up
+            try {
+              await supabase.storage.from(bucketName).remove([storageKey]);
+            } catch (cleanupErr: unknown) {
+              console.error(
+                "Compensating storage cleanup failed after soft-deletion:",
+                storageKey,
+                cleanupErr instanceof Error ? cleanupErr.message : "Storage error"
+              );
+            }
+          } else {
+            // If compensating soft-delete failed, PRESERVE storage object so active database record has its file
+            console.error(
+              `[OPERATIONAL ALERT] Ambiguous commit detected for document ${insertedDocId} with storage key ${storageKey}. Preserving storage object because compensating soft-delete could not be confirmed.`
+            );
+          }
+        } else {
+          // Outcome is "unknown": reconciliation query failed, or zero rows after COMMIT/ROLLBACK failure.
+          // NEVER delete storage when outcome cannot be conclusively established!
+          console.error(
+            `[OPERATIONAL ALERT] Ambiguous commit outcome remains unknown for document ${insertedDocId} with storage key ${storageKey}. Preserving storage object to prevent silent storage deletion while database state is unresolved.`
+          );
+        }
+
+        // 4. Standalone failure audit logging
+        try {
+          await recordAuditLog({
+            actorId: userId,
+            documentId: null,
+            action: "file:upload",
+            outcome: "failure",
+            details: { reason: "database_or_audit_persistence_failure" },
+          });
+        } catch (auditErr: unknown) {
+          console.error("Failed to log upload failure audit entry:", auditErr);
+        }
+
+        res.status(500).json({ error: "Failed to create document metadata" });
+      } finally {
+        releaseClient(true);
+      }
+      return;
+    }
+
+    // Branch B: Metadata-only JSON (Phase 5 compatibility)
+    const title = sanitizeString(body.title);
+    if (!title || title.length < 1 || title.length > 200) {
+      res.status(400).json({ error: "Title is required and must be between 1 and 200 characters" });
+      return;
+    }
+
+    const mimeType = sanitizeString(body.mime_type) || "application/octet-stream";
+    let sizeBytes = typeof body.size_bytes === "number" ? body.size_bytes : 1;
+    if (sizeBytes <= 0) {
+      sizeBytes = 1;
+    }
+
+    // Server-generated unique storage key indicating metadata-only record
+    const storageKey = `raw/${crypto.randomUUID()}`;
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const insertQuery = `
+        INSERT INTO public.documents (owner_id, title, category, storage_key, mime_type, size_bytes)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING id, owner_id, title, category, mime_type, size_bytes, created_at, updated_at;
+      `;
+
+      const result = await client.query(insertQuery, [
+        userId,
+        title,
+        category,
+        storageKey,
+        mimeType,
+        sizeBytes,
+      ]);
+
+      const createdDoc = result.rows[0];
+
+      await recordAuditLog({
+        actorId: userId,
+        documentId: createdDoc.id,
+        action: "document:create",
+        outcome: "success",
+        details: { title, category },
+        client,
+      });
+
+      await client.query("COMMIT");
+
+      res.status(201).json({
+        document: {
+          ...createdDoc,
+          access_level: "owner",
+        },
+      });
+    } catch (err: unknown) {
+      await client.query("ROLLBACK");
+      console.error("Error creating document:", err);
+      res.status(500).json({ error: "Failed to create document metadata" });
+    } finally {
+      client.release();
+    }
   }
-
-  const title = sanitizeString(body.title);
-  const category = sanitizeString(body.category);
-
-  if (!title || title.length < 1 || title.length > 200) {
-    res.status(400).json({ error: "Title is required and must be between 1 and 200 characters" });
-    return;
-  }
-
-  if (!category || category.length < 1 || category.length > 100) {
-    res.status(400).json({ error: "Category is required and must be between 1 and 100 characters" });
-    return;
-  }
-
-  // Schema compatibility contract for Phase 5:
-  // mime_type and size_bytes are required non-null in DB schema from Migration 1.
-  const mimeType = sanitizeString(body.mime_type) || "application/octet-stream";
-  let sizeBytes = typeof body.size_bytes === "number" ? body.size_bytes : 1;
-  if (sizeBytes <= 0) {
-    sizeBytes = 1;
-  }
-
-  // Server-generated unique storage key (never client-chosen)
-  const storageKey = `raw/${crypto.randomUUID()}`;
-
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-
-    const insertQuery = `
-      INSERT INTO public.documents (owner_id, title, category, storage_key, mime_type, size_bytes)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      RETURNING id, owner_id, title, category, mime_type, size_bytes, created_at, updated_at;
-    `;
-
-    const result = await client.query(insertQuery, [
-      userId,
-      title,
-      category,
-      storageKey,
-      mimeType,
-      sizeBytes,
-    ]);
-
-    const createdDoc = result.rows[0];
-
-    // Transactional audit log insertion
-    await recordAuditLog({
-      actorId: userId,
-      documentId: createdDoc.id,
-      action: "document:create",
-      outcome: "success",
-      details: { title, category },
-      client,
-    });
-
-    await client.query("COMMIT");
-
-    res.status(201).json({
-      document: {
-        ...createdDoc,
-        access_level: "owner",
-      },
-    });
-  } catch (err: unknown) {
-    await client.query("ROLLBACK");
-    console.error("Error creating document:", err);
-    res.status(500).json({ error: "Failed to create document metadata" });
-  } finally {
-    client.release();
-  }
-});
+);
 
 /**
  * GET /api/documents/:id
@@ -249,6 +585,123 @@ documentsRouter.get("/:id", async (req: Request, res: Response): Promise<void> =
   } catch (err: unknown) {
     console.error("Error retrieving document:", err);
     res.status(500).json({ error: "Failed to retrieve document" });
+  }
+});
+
+/**
+ * GET /api/documents/:id/download
+ * Securely authorizes and streams file download from private object storage.
+ * Accessible by owner, active editors, and active readers.
+ */
+documentsRouter.get("/:id/download", async (req: Request, res: Response): Promise<void> => {
+  const userId = req.user!.id;
+  const documentId = req.params.id;
+
+  if (!isValidUUID(documentId)) {
+    res.status(400).json({ error: "Invalid document ID format" });
+    return;
+  }
+
+  try {
+    const doc = await getDocumentWithAccess(documentId, userId);
+
+    if (!doc || !doc.access_level) {
+      // Record denied audit attempt without leaking document existence
+      await recordAuditLog({
+        actorId: userId,
+        documentId,
+        action: "file:download",
+        outcome: "denied",
+        details: { reason: "not_found_or_unauthorized" },
+      });
+      res.status(404).json({ error: "Document not found" });
+      return;
+    }
+
+    // Distinguish metadata-only records from real files
+    if (!doc.storage_key || doc.storage_key.startsWith("raw/") || !doc.storage_key.startsWith("private/")) {
+      await recordAuditLog({
+        actorId: userId,
+        documentId: doc.id,
+        action: "file:download",
+        outcome: "denied",
+        details: { reason: "metadata_only_document" },
+      });
+      res.status(404).json({ error: "Document has no associated file content" });
+      return;
+    }
+
+    const bucketName = process.env.STORAGE_BUCKET_NAME || "trustvault-private";
+    const supabase = getSupabaseAdmin();
+
+    const { data, error } = await supabase.storage.from(bucketName).download(doc.storage_key);
+
+    if (error || !data) {
+      console.error("Storage download failed:", error);
+      await recordAuditLog({
+        actorId: userId,
+        documentId: doc.id,
+        action: "file:download",
+        outcome: "failure",
+        details: { reason: "storage_object_not_found_or_inaccessible" },
+      });
+      res.status(404).json({ error: "File content not found in storage" });
+      return;
+    }
+
+    // Convert Blob or ArrayBuffer to Node.js Buffer
+    let buffer: Buffer;
+    if (typeof (data as any).arrayBuffer === "function") {
+      const ab = await (data as any).arrayBuffer();
+      buffer = Buffer.from(ab);
+    } else if (Buffer.isBuffer(data)) {
+      buffer = data;
+    } else {
+      buffer = Buffer.from(data as any);
+    }
+
+    res.setHeader("Content-Type", doc.mime_type || "application/octet-stream");
+    res.setHeader("Content-Disposition", buildContentDisposition(doc.title));
+    res.setHeader("Content-Length", buffer.length);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+
+    let downloadAuditRecorded = false;
+
+    const recordDownloadAudit = (outcome: "success" | "failure", reason?: string) => {
+      if (downloadAuditRecorded) return;
+      downloadAuditRecorded = true;
+
+      recordAuditLog({
+        actorId: userId,
+        documentId: doc.id,
+        action: "file:download",
+        outcome,
+        details: {
+          size_bytes: buffer.length,
+          ...(reason ? { reason } : {}),
+        },
+      }).catch((err: unknown) => {
+        console.error(
+          `[Audit] Failed to record download ${outcome} audit log:`,
+          err instanceof Error ? err.message : "Unknown error"
+        );
+      });
+    };
+
+    res.on("finish", () => {
+      recordDownloadAudit("success");
+    });
+
+    res.on("close", () => {
+      if (!res.writableEnded) {
+        recordDownloadAudit("failure", "client_disconnected_or_transfer_interrupted");
+      }
+    });
+
+    res.send(buffer);
+  } catch (err: unknown) {
+    console.error("Error processing document download:", err);
+    res.status(500).json({ error: "Failed to download document" });
   }
 });
 

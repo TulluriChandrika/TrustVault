@@ -292,6 +292,158 @@ These results were reported by the development agent and should be retained with
 
 ---
 
+## Entry 10 — Phase 6: Secure Document Lifecycle Implementation
+
+**Date:** 2026-10-22
+**Task:** Implement Phase 6 Secure Document Lifecycle: server-side file validation, private Supabase Storage integration, cross-system transactional metadata/audit persistence with compensating object cleanup, and backend-mediated authorized streaming downloads.
+
+**Prompt summary:** Implement multipart file upload and backend-mediated streaming download according to the Phase 6 inspection report and requirements: enforce 10MB limit during multipart parsing; validate MIME type and magic bytes (reject null bytes in TXT/CSV); use server-generated storage keys in private bucket; execute storage upload before DB transaction, compensating with storage object deletion if DB/audit insert fails; distinguish metadata-only records (`raw/...`) from file uploads and block download attempts; enforce download authorization on every request; add comprehensive security tests; do not run Git commands, read secrets, or start Phase 7/8.
+
+**AI assistance:**
+- Added `multer` memory storage configured with a strict 10MB limit (`limits: { fileSize: 10 * 1024 * 1024 }`) and error handling for `LIMIT_FILE_SIZE` returning `413 Payload Too Large`.
+- Implemented `validateFileContent` in `apps/api/src/utils/validation.ts` validating MIME types against `ALLOWED_MIME_TYPES` (`application/pdf`, `image/png`, `image/jpeg`, `image/webp`, `text/plain`, `text/csv`), verifying binary magic-byte signatures for PDF, PNG, JPEG, and WebP, checking text/CSV files for UTF-8 and rejecting binary null bytes (`0x00`), and sanitizing filenames with `sanitizeFilename`.
+- Updated `POST /api/documents` in `apps/api/src/routes/documents.ts`:
+  - When a file is uploaded via `multipart/form-data`, file content is validated, a server-controlled key `private/${userId}/${uuid}.${ext}` is generated, and the file is uploaded to the private bucket `trustvault-private` via `getSupabaseAdmin().storage.from(...)`.
+  - Database metadata insertion and `file:upload` audit log insertion are executed atomically in a PostgreSQL transaction (`BEGIN ... COMMIT`).
+  - If database metadata or audit logging insertion fails, the transaction rolls back (`ROLLBACK`) and compensating cleanup immediately deletes the uploaded object from storage via `supabaseAdmin.storage.from(bucket).remove([storageKey])`.
+  - Preserved Phase 5 metadata-only JSON creation for compatibility, tagging such records with a `raw/${uuid}` storage key prefix.
+- Implemented `GET /api/documents/:id/download` in `apps/api/src/routes/documents.ts`:
+  - Enforces access authorization on every download request (owner, active editor, or active reader).
+  - Rejects metadata-only records (`storage_key.startsWith("raw/")`) with `404 Not Found` ("Document has no associated file content").
+  - Rejects soft-deleted documents with `404 Not Found`.
+  - Streams document bytes directly through Express using safe response headers: `Content-Type: application/octet-stream`, `X-Content-Type-Options: nosniff`, and `Content-Disposition: attachment; filename="<sanitized_title>"`.
+  - Audits successful downloads (`file:download`, `success`) and unauthorized/unauthenticated download attempts (`file:download`, `denied`).
+- Expanded `apps/api/src/documents.test.ts` from 30 to 67 tests (+37 new Phase 6 tests), covering upload validation, multipart file presence requirement, multipart field count/value size limits, single-file restriction, oversized files (413), magic byte spoofing, binary null bytes in text files, storage upload failure (500), compensating storage deletion on DB/audit failure, compensating cleanup on pool acquisition failure and rollback error, standalone failure audit logging, download authorization for owner/editor/reader, download denial for stranger/revoked/deleted/metadata-only documents, non-private storage key rejection, missing storage objects, download completion/interruption tracking, deduplicated download audits, error handling on audit failure, RFC 6266 Content-Disposition headers (Unicode, quotes, semicolons, percent, CR/LF injection), path normalization across POSIX/Windows/traversal paths, and pure PDF ArrayBuffer fixtures.
+- Updated `THREATS.md` (T5 and T6 marked as implemented and verified in Phase 6) and `README.md` (documented new endpoints, validation rules, storage architecture, compensating transactions, and known limitations).
+
+**Developer review and decisions:**
+- Prevented metadata-only records from being downloaded as files without requiring a database migration by prefixing metadata-only records with `raw/` and rejecting downloads for keys that do not belong to `private/`.
+- Enforced strict multipart parsing limits: max 1 file, max 10 fields, max 20 parts, max 64KB field size, returning 413 for size limits and 400 for structure violations.
+- Guaranteed compensating storage cleanup runs on every post-upload failure path, including database connection acquisition failure (`pool.connect()`), transaction execution errors, and even if transactional `ROLLBACK` throws.
+- Implemented RFC 6266 and RFC 5987 compliant `Content-Disposition` header with both ASCII fallback and UTF-8 percent-encoded `filename*`, stripping CR/LF to prevent HTTP response splitting.
+- Normalized path separators before constructing download headers: implemented `normalizeFilename()` to strip drive letters, directory paths, and path separators (`/` and `\`) before generating both the ASCII fallback and RFC 5987 percent-encoded UTF-8 `filename*`.
+- Fixed fire-and-forget download audit calls: attached `.catch(...)` error handlers to prevent unhandled promise rejections, implemented an in-memory lifecycle guard (`downloadAuditRecorded`) to ensure the application initiates at most one audit attempt per request (avoiding duplicate attempts when both `finish` and `close` occur), clarified that successful persistence in PostgreSQL cannot be guaranteed if the database fails, and documented that `finish` establishes completion of server response streaming rather than client disk persistence.
+- Corrected test fixtures to return clean, valid PDF ArrayBuffer slices.
+- Explicitly documented that all tests in the suite are in-memory unit tests using mocks and that production readiness requires live end-to-end integration testing against real Supabase infrastructure.
+
+**Verification:**
+- `npm run check`: Exited with code `0`.
+  - Typecheck: passed across `@trustvault/api` and `@trustvault/web`.
+  - Production build: passed across `@trustvault/api` and `@trustvault/web`.
+  - Automated tests: 89 total tests passed (12 auth tests, 10 server tests, 67 document tests).
+  - Test framework: Vitest with Supertest using in-memory mock isolation. All storage and database client interactions in the test suite are mocked unit tests; no real PostgreSQL integration tests were executed.
+
+**Outcome:** Phase 6 fully reviewed, hardened against CodeRabbit findings, verified, and documented.
+
+**Commit reference:** Add a real commit hash after committing Phase 6 changes.
+
+---
+
+## Entry 11 — Phase 6: Filename Validation Hardening (Edge Cleanup & Unicode Truncation)
+
+**Date:** 2026-10-22
+**Task:** Address CodeRabbit review findings regarding edge dot/whitespace normalization and Unicode-safe filename truncation in `apps/api/src/utils/validation.ts`.
+
+**Prompt summary:**
+1. Remove edge dots and whitespace in one step:
+   - Normalize path separators and remove path components before building either filename representation.
+   - Apply edge cleanup so leading and trailing dots and whitespace are removed together in a single operation, preventing alternating dot/space patterns (e.g. ` .report. `, ` . .report. . `) from leaving exposed edge dots or whitespace.
+   - Provide a safe fallback (`download`) when normalization produces an empty string.
+   - Maintain RFC 6266 `Content-Disposition` behavior with safe ASCII fallback and UTF-8 `filename*`.
+2. Truncate without splitting Unicode characters:
+   - Replace UTF-16 code-unit slicing with grapheme-aware truncation using `Intl.Segmenter` (with code-point fallback).
+   - Ensure multi-byte surrogate pairs and combining characters are never bisected into invalid surrogate halves or replacement characters.
+   - Apply truncation consistently before building headers and re-clean edge dots/whitespace if truncation cuts on an edge character.
+   - Use `/u` flag for non-ASCII regex replacement in ASCII fallback construction so surrogate pairs map to a single underscore.
+   - Add regression tests covering edge dots, whitespace, mixed combinations, surrogate pairs, combining marks, and truncation boundaries.
+
+**AI assistance:**
+- Implemented `truncateUnicode(str, maxGraphemes = 150)` in `apps/api/src/utils/validation.ts` using `Intl.Segmenter` (`granularity: "grapheme"`) to count and truncate whole graphemes, preserving multi-byte surrogate pairs (e.g. emoji `🎉`) and combining marks (`e\u0301`). Included code-point iterator fallback for runtimes without `Intl.Segmenter`.
+- Refactored `normalizeFilename()`:
+  - Combined leading and trailing dots and whitespace cleanup into a single regex operation: `replace(/^[\s.]+|[\s.]+$/g, "")`.
+  - Replaced path components (`^.*[\\/]`) and remaining separators (`[\\/]`) with underscores, and stripped non-printable control characters (`[\x00-\x1f\x7f]`).
+  - Added truncation via `truncateUnicode()` to at most 150 graphemes, followed by re-application of single-step edge cleanup in case truncation cut at a dot or space.
+  - Implemented safe fallback to `"download"` if the result is empty or whitespace/dots only.
+- Updated `sanitizeFilename()` to use `normalizeFilename()` and single-step edge cleaning with `"download"` fallback.
+- Updated `buildContentDisposition()`:
+  - Applied `/[^\x20-\x7e]/gu` (Unicode mode) and `["\\;=]` character replacement for ASCII `filename` fallback with single-step edge cleanup and `"download"` fallback.
+  - Formatted RFC 5987 UTF-8 `filename*` using percent-encoding on the normalized, grapheme-truncated filename.
+- Added 5 regression tests (Tests 60–64) in `apps/api/src/documents.test.ts`:
+  - Test 60: Removes edge dots and whitespace in one step (` . .report. . ` -> `report`).
+  - Test 61: Falls back to `"download"` when title consists only of whitespace and dots (`   . . .   `).
+  - Test 62: Truncates long filenames cleanly without splitting surrogate pairs (149 ASCII + `🎉` + overflow text).
+  - Test 63: Preserves combining characters (`e\u0301`) as intact grapheme clusters during truncation.
+  - Test 64: Cleans trailing dots if truncation cuts immediately after a period.
+
+**Developer review and decisions:**
+- Confirmed Finding 1: Separate trimming and dot stripping previously left exposed dots when spaces preceded or followed them. Combined regex `replace(/^[\s.]+|[\s.]+$/g, "")` cleans both simultaneously.
+- Confirmed Finding 2: Standard `.slice()` sliced UTF-16 code units, risking bisection of surrogate pairs. Used native Node.js `Intl.Segmenter` for grapheme-cluster awareness. Also fixed ASCII fallback regex to include `/u` flag so surrogate pairs produce a single replacement character (`_`) rather than two (`__`).
+- Documented that while grapheme truncation guarantees valid Unicode and header injection safety, external filesystems and client OSes have varying path-length limits.
+
+**Verification:**
+- `npm run check`: Exited with code `0`.
+  - Typecheck: passed across `@trustvault/api` and `@trustvault/web`.
+  - Production build: passed across `@trustvault/api` and `@trustvault/web`.
+  - Automated tests: 94 total tests passed (12 auth tests, 10 server tests, 72 document tests).
+  - Vitest test suite runs in-memory with mocked storage and database clients.
+
+**Outcome:** All filename validation and Unicode truncation issues fixed and verified.
+
+**Commit reference:** Add a real commit hash after committing Phase 6 changes.
+
+---
+
+## Entry 12 — Phase 6: Final Completion Review & CodeRabbit Remediation
+
+**Date:** 2026-10-22
+**Task:** Resolve three outstanding CodeRabbit findings in Phase 6:
+1. Verify compensating DELETE against the real repository schema: replaced hard `DELETE` with schema-safe soft-delete (`UPDATE public.documents SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL RETURNING id`) to preserve referential integrity and audit trail traceability.
+2. Preserve storage object during ambiguous COMMIT when the verification query itself fails: implemented 3-state reconciliation (`uncommitted`, `committed`, `unknown`), guaranteeing storage objects are preserved whenever the transaction outcome cannot be conclusively established (`unknown`) or soft-delete fails.
+3. Enforce Content-Disposition header limits when one grapheme is too large: accumulated graphemes individually against `MAX_ENCODED_FILENAME_LEN = 800` and implemented safe fallback to `"download"` when a single grapheme cluster exceeds the budget or the header exceeds `MAX_CONTENT_DISPOSITION_LEN = 2000`.
+
+**AI assistance:**
+- Updated `apps/api/src/routes/documents.ts`:
+  - Structured ambiguous COMMIT recovery into three distinct outcomes: `uncommitted`, `committed`, and `unknown`.
+  - When outcome is `unknown` (e.g. verification query fails, times out, or disconnects), the storage object is strictly preserved and an operational alert is logged.
+  - When outcome is `committed`, executes schema-safe soft-delete (`UPDATE public.documents SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL RETURNING id`). If soft-delete succeeds, storage cleanup proceeds; if soft-delete fails, the storage object is preserved.
+  - When outcome is `uncommitted` (e.g. verification query confirms 0 rows or insert never returned an ID), storage cleanup safely deletes the orphaned storage object.
+- Updated `apps/api/src/utils/validation.ts`:
+  - Defined `MAX_ENCODED_FILENAME_LEN = 800` and `MAX_CONTENT_DISPOSITION_LEN = 2000`.
+  - Replaced arbitrary stepping with grapheme-cluster-by-grapheme-cluster accumulation.
+  - Added fallback to `"download"` if a single grapheme cluster exceeds the entire budget.
+  - Added invariant check ensuring the total `Content-Disposition` header never exceeds `MAX_CONTENT_DISPOSITION_LEN`.
+- Added/updated regression tests (Tests 65–75) in `apps/api/src/documents.test.ts`:
+  - Test 65: Preserves storage file during ambiguous COMMIT if database record exists and soft-delete fails.
+  - Test 66: Cleans up storage file during ambiguous COMMIT when committed DB record is successfully soft-deleted.
+  - Test 67: Caps Content-Disposition total encoded length safely under 2KB for titles with heavy multi-byte graphemes.
+  - Test 68: Preserves storage file when the commit verification query itself fails (`unknown` state).
+  - Test 69: Preserves storage file when COMMIT failed even if verification query returns zero rows (zero rows do not prove uncommitted when COMMIT failed).
+  - Test 70: Preserves storage file when ROLLBACK failed even if verification query returns zero rows.
+  - Test 71: Cleans up storage file only when supported by reliable evidence (error before COMMIT + clean ROLLBACK + zero rows).
+  - Test 72: Releases transaction client BEFORE running reconciliation queries on the pool (preventing pool starvation/deadlocks).
+  - Test 73: Discards transaction client from the pool with error argument when transaction or rollback fails.
+  - Test 74: Falls back to `"download"` when a single grapheme cluster exceeds the length budget.
+  - Test 75: Preserves complex joined emoji sequences (ZWJ) without splitting surrogate pairs or exceeding limit.
+- Updated `README.md` and `THREATS.md` to reflect 3-state reconciliation, client release before reconciliation, soft-delete, and grapheme limits.
+
+**Developer review and decisions:**
+- Confirmed Finding 1: Transaction client was previously held during subsequent `pool.query()` reconciliation calls, which could cause pool exhaustion/deadlock in limited pools. Also, failed connections were not being discarded. Fixed by releasing or discarding the client connection before initiating pool queries, and passing the failure error to `client.release(err)` to discard broken sockets.
+- Confirmed Finding 2: A zero-row query result was previously treated as proof of an uncommitted transaction even if COMMIT had failed or ROLLBACK had thrown. Fixed by classifying zero rows as `unknown` whenever COMMIT was attempted or ROLLBACK failed, preserving storage for manual review. Conclusive uncommitted state requires either no insert ID or clean pre-commit rollback.
+- Confirmed Finding 3: Stepping by -15 could fail if a single grapheme cluster exceeded the budget. Fixed by accumulating whole graphemes up to `MAX_ENCODED_FILENAME_LEN = 800` and falling back cleanly to `"download"`.
+
+**Verification:**
+- `npm run check`: Exited with code `0`.
+  - Typecheck: passed across `@trustvault/api` and `@trustvault/web`.
+  - Production build: passed across `@trustvault/api` and `@trustvault/web`.
+  - Automated tests: **105 total tests passed** (12 auth tests, 10 server tests, 83 document tests).
+  - All storage and database client interactions in tests are strictly mocked unit tests.
+
+**Outcome:** All CodeRabbit review findings fully resolved, tested, and verified.
+
+**Commit reference:** Add a real commit hash after committing Phase 6 changes.
+
+---
+
 ## Responsible Use and Verification
 
 AI-generated code, security recommendations, and documentation are treated as proposals requiring developer review.

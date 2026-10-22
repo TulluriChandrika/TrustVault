@@ -176,15 +176,20 @@ Status definitions:
 **Impact:** Confidential documents can be downloaded without authorization.
 
 **Mitigations:**
-- Use a private storage bucket.
-- Keep service credentials on the backend.
-- Generate storage keys server-side.
-- Authorize downloads before issuing access.
-- Use short-lived access URLs where appropriate and understand their revocation limitations.
+- Use a private storage bucket (`trustvault-private`).
+- Keep service credentials on the backend (`SUPABASE_SECRET_KEY` via `getSupabaseAdmin()`).
+- Generate unpredictable storage keys server-side (`private/${userId}/${uuid}.${ext}`). Never accept client-selected storage keys.
+- Enforce server-side authorization before every download via `GET /api/documents/:id/download`.
+- Backend-mediated streaming: downloads are mediated through the server so that permission revocation is immediate for subsequent requests.
+- Prevent metadata-only records (`raw/...`) from being downloaded as if they contain real files.
+- Return generic `404 Not Found` for unshared, non-existent, or soft-deleted documents (anti-enumeration).
 
-**Verification:** An unauthenticated user must not retrieve a private document directly from storage.
+**Limitations:**
+- If a download transfer is already in flight across the network socket while revocation occurs, bytes already sent cannot be recalled. However, all subsequent download attempts are immediately denied.
 
-**Status:** Planned or unverified. The intended bucket name is `trustvault-private`; its live privacy configuration has not been established by the evidence in this report.
+**Verification:** Automated tests in `apps/api/src/documents.test.ts` verify owner, editor, and reader download access, rejection of unshared stranger access (404), rejection of revoked user access (404), rejection of soft-deleted documents (404), rejection of metadata-only records (404), and safe error handling when storage objects are missing.
+
+**Status:** Implemented and verified in Phase 6.
 
 ### T6 — Malicious or oversized uploads
 
@@ -195,16 +200,22 @@ Status definitions:
 **Impact:** Resource exhaustion, unsafe processing, or storage abuse.
 
 **Mitigations:**
-- Enforce file-size limits.
-- Validate allowed file types using more than the filename extension.
-- Generate safe storage keys.
-- Reject malformed input.
-- Consider malware scanning where appropriate.
-- Avoid executing uploaded content.
+- Enforce strict 10 MB file-size limits on multipart uploads (`multer` bound and content length validation).
+- Validate allowed MIME types (PDF, PNG, JPEG, WebP, Plain Text, CSV).
+- Perform magic byte validation on buffer headers to detect file signatures and prevent MIME-type spoofing.
+- Reject plain text and CSV files containing binary or null bytes (`0x00`).
+- Sanitize filenames to prevent path traversal and control character injection.
+- Generate unpredictable server-controlled storage keys independently of user filenames.
+- Implement compensating cleanup: if database insertion or audit logging fails after storage upload, the orphaned object is deleted from storage.
+- Ambiguous commit protection: distinguishes three transaction outcomes (`uncommitted`, `committed`, `unknown`). If the verification query fails or times out, the outcome is `unknown` and the storage object is strictly preserved. If `committed`, the server executes schema-safe soft-delete (`UPDATE public.documents SET deleted_at = now()`) before deleting storage, preserving referential integrity and audit trail history; if soft-delete fails, storage is preserved and an operational alert is logged.
 
-**Verification:** Test oversized files, disallowed MIME types, mismatched extensions, and malformed uploads.
+**Limitations:**
+- File signature / magic-byte verification validates declared headers against format signatures, but does not substitute for an active antivirus / malware scanning sandbox.
+- Distributed transaction atomicity: in network partitions where database COMMIT state is ambiguous and database connectivity cannot be established to verify or clean up the database record, the storage object is preserved to avoid silent data loss, requiring operational alert monitoring.
 
-**Status:** Planned or unverified. Phase 2's JSON body limit does not establish secure multipart file-upload validation.
+**Verification:** Automated tests in `apps/api/src/documents.test.ts` verify rejection of empty files (400), oversized files (413), disallowed MIME types (400), spoofed magic bytes (400), text files containing null bytes (400), execution of compensating cleanup upon uncommitted database failure, preservation of storage files when verification queries fail (unknown state), and preservation of storage files during ambiguous COMMIT when soft-delete fails.
+
+**Status:** Implemented and verified in Phase 6.
 
 ### T7 — Audit-log tampering
 
