@@ -118,9 +118,9 @@ Status definitions:
 
 **Detection:** Record denied access attempts with an appropriate actor, target, action, and outcome.
 
-**Verification:** Owner A must not access Owner B's document without an explicit valid grant.
+**Verification:** Owner A must not access Owner B's document without an explicit valid grant. Automated tests in `apps/api/src/documents.test.ts` verify cross-user isolation: an unauthorized user receives `404 Not Found` (preventing document existence enumeration), a denied audit record is generated, and mutations are prevented.
 
-**Status:** Planned for Phase 5 (Document and Permission Engine).
+**Status:** Implemented and verified for document metadata in Phase 5.
 
 ### T3 — Privilege escalation
 
@@ -140,24 +140,32 @@ Status definitions:
 
 **Status:** Implemented and verified for user provisioning and role preservation (Phase 4).
 
-### T4 — Improper permission grants and revocation
+### T4 — Improper permission grants, TOCTOU races, and revocation
 
-**Asset:** Sharing permissions and document confidentiality.
+**Asset:** Sharing permissions, document confidentiality, and access controls.
 
-**Threat:** An unauthorized user grants access, or a revoked user continues accessing a document.
+**Threat:** An unauthorized user grants access, a user grants permissions to themselves, concurrent grants create inconsistent state, or a revoked user continues mutating/accessing a document via time-of-check/time-of-use (TOCTOU) races.
 
-**Impact:** Persistent unauthorized access.
+**Impact:** Persistent unauthorized access, permission corruption, or unauthorized modification after revocation.
 
 **Mitigations:**
-- Restrict grants and revocations to authorized owners or explicitly permitted administrators.
-- Validate that the target user and document exist.
-- Check the active permission state on every protected request.
-- Ensure revocation takes effect immediately.
-- Avoid long-lived download URLs that remain usable after revocation unless their risk is explicitly addressed.
+- Restrict grants and revocations strictly to document owners.
+- Prevent self-grant: explicitly reject attempts to grant permissions to oneself or the document owner (`400 Bad Request`).
+- Anti-enumeration for target users: return a generic `404 Not Found` ("Target user not found or not eligible") with denied audit logging for both non-existent and inactive user targets to prevent account existence and status enumeration.
+- Prevent duplicate active grants: check existing active grants and handle concurrent race conditions by catching PostgreSQL unique constraint violations (`code 23505`) to return `409 Conflict`.
+- Guard against TOCTOU races: metadata mutations (`PATCH /api/documents/:id`) enforce authorization atomically in the update query itself (`WHERE ... AND (owner_id = $4 OR EXISTS (SELECT 1 FROM document_permissions WHERE permission = 'edit' AND revoked_at IS NULL))`), rolling back and returning `403` if permission was concurrently revoked.
+- Atomic revocation: revocation UPDATE queries check `rowCount === 0` to prevent false success on repeated or concurrent revocation requests (`404 Not Found`).
+- Transactional audit coupling: all mutating operations (`document:create`, `document:update`, `document:delete`, `permission:grant`, `permission:revoke`) execute mutations and audit entries within the same database transaction. An audit logging failure rolls back the entire mutation.
+- Check active permission state (`revoked_at IS NULL`) on every protected request.
+- Ensure revocation takes effect immediately on all subsequent requests (returning `404 Not Found`).
 
-**Verification:** Grant access, verify it works, revoke it, and verify that the same access path now fails.
+**Concurrency Limitations:**
+- If an authorized request (such as a read) executes and sends its response before a revocation transaction commits, the response reflects the authorized state at execution time.
+- Node.js executes HTTP requests asynchronously; instantaneous revocation of already in-flight network packets is impossible without persistent connection termination (e.g. websockets), but all subsequent requests and any in-flight mutation that executes SQL after revocation commits are strictly blocked.
 
-**Status:** Planned or unverified.
+**Verification:** Automated unit/mocked tests in `apps/api/src/documents.test.ts` (30 tests) verify owner-only grant, rejection of non-owner grants (403), self-grant rejection (400), target user anti-enumeration (generic 404 for unknown or inactive targets), rejection of duplicate active grants and concurrent race handling (409), atomic revocation handling (404), rollback on audit failure across all mutation types, cross-user listing isolation, exclusion of soft-deleted documents across all endpoints, admin role isolation, and immediate 404 rejection on subsequent requests following revocation.
+
+**Status:** Implemented, hardened, and verified in Phase 5.
 
 ### T5 — Public storage exposure
 

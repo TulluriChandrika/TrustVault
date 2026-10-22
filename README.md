@@ -111,6 +111,27 @@ trustvault/
 - **Protected Endpoints**: `/api/me` and `/api/auth/me` return safe profile attributes (`id`, `email`, `role`, `is_active`, `created_at`) and omit `password_hash` and secrets.
 - **Frontend Flow**: Minimal functional auth in `apps/web` supports account creation, login, session persistence, logout, and token-authenticated profile probing against `/api/me`.
 
+### Document and Permission Engine (Phase 5)
+
+- **Server-Side Authorization**: Because the backend connects using the `postgres` role (which bypasses RLS), all access controls are verified in Express for every protected document operation.
+- **Ownership Immutability**: `owner_id` is derived strictly from the verified Supabase Auth user on creation (`req.user.id`) and cannot be assigned or altered by clients.
+- **Permission Hierarchy**:
+  - `owner`: Full metadata control, grant/revoke permissions, soft-delete document.
+  - `edit`: Read metadata and update editable fields (`title`, `category`); cannot delete document, change owner, or manage permissions.
+  - `read`: Read-only access to metadata; cannot mutate document or manage permissions.
+- **Duplicate Grant Prevention**: Duplicate active permission grants are rejected with `409 Conflict`. Active grants must be revoked before granting a different permission level.
+- **Immediate Revocation**: Revoking a permission sets `revoked_at = now()`, immediately invalidating access on the very next request.
+- **Transactional Audit Logging**: Mutations (`create`, `update`, `delete`, `grant`, `revoke`) write audit records inside the same SQL transaction. If audit log recording fails, the transaction is rolled back, preventing any mutation from persisting without an audit trail.
+- **Endpoints**:
+  - `GET /api/documents` — List owned and actively shared documents.
+  - `POST /api/documents` — Create document metadata record.
+  - `GET /api/documents/:id` — Retrieve metadata if owner, editor, or reader.
+  - `PATCH /api/documents/:id` — Update allowed metadata (`title`, `category`) if owner or editor.
+  - `DELETE /api/documents/:id` — Soft-delete document if owner.
+  - `GET /api/documents/:id/permissions` — List active grants if owner.
+  - `POST /api/documents/:id/permissions` — Grant `read` or `edit` permission to active user if owner.
+  - `DELETE /api/documents/:id/permissions/:userId` — Revoke active grant if owner.
+
 ### Database Access
 
 All application data access goes through the Express backend via direct PostgreSQL
@@ -148,9 +169,9 @@ at the database level.
 
 ## Known Limitations
 
-- Document CRUD, permission grants/revocations, and file storage are not yet implemented (scheduled for Phase 5).
+- Actual file uploads, downloads, object storage integration (`trustvault-private` bucket), and signed download URLs are scheduled for Phase 6 (Phase 5 implements metadata and permissions).
 - Rate limiting is in-memory only — not suitable for multi-instance deployments without an external store (e.g., Redis).
-- `THREATS.md` documents 13 identified threat profiles; T1, T3, and T12 have been implemented and verified in Phase 4.
+- `THREATS.md` documents 13 identified threat profiles; T1, T2, T3, T4, and T12 have been implemented and verified.
 
 ## License
 

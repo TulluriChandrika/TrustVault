@@ -77,12 +77,18 @@ app.get("/health", async (_req, res) => {
 });
 
 import { authRouter } from "./routes/auth.js";
+import { documentsRouter } from "./routes/documents.js";
 
 // ---------------------------------------------------------------------------
 // Authentication & Profile routes
 // ---------------------------------------------------------------------------
 app.use("/api/auth", authRouter);
 app.use("/api", authRouter); // Exposes /api/me as well as /api/auth/me
+
+// ---------------------------------------------------------------------------
+// Document & Permission routes (Phase 5)
+// ---------------------------------------------------------------------------
+app.use("/api/documents", documentsRouter);
 
 // ---------------------------------------------------------------------------
 // 404 handler for unknown routes

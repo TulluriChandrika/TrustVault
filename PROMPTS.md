@@ -216,7 +216,79 @@ These results were reported by the development agent and should be retained with
 
 **Outcome:** Phase 4 fully implemented, tested, and documented.
 
-**Commit reference:** Add a real commit hash after committing Phase 4 changes.
+**Commit reference:** Commit `8f1da25` (`feat(auth): implement Supabase authentication`).
+
+---
+
+## Entry 8 — Document and Permission Engine (Phase 5)
+
+**Date:** 2026-10-21
+**Task:** Implement server-side document authorization, metadata CRUD, permission grants/revocation, transactional audit logging, and security test suite.
+
+**Prompt summary:** Implement Phase 5 document and permission engine on Express backend; enforce server-side authorization on every operation; support metadata CRUD without client-specified `storage_key` or `owner_id`; reject duplicate active permission grants with 409 Conflict; enforce owner-only grant/revoke; support read/edit hierarchy; record audit events inside transactions with rollback on failure; add automated security tests covering cross-user isolation, denied mutations, and audit consistency.
+
+**AI assistance:**
+- Inspected database schema from migrations 1, 2, and 3, confirming no schema migration is needed for Phase 5.
+- Created `apps/api/src/utils/validation.ts` for RFC 4122 UUID and string sanitization.
+- Created `apps/api/src/audit.ts` supporting transactional audit recording inside SQL transactions (with full rollback on audit write failure) and standalone logging for denied requests.
+- Created `apps/api/src/routes/documents.ts` implementing `GET /api/documents`, `POST /api/documents`, `GET /api/documents/:id`, `PATCH /api/documents/:id`, `DELETE /api/documents/:id`, `GET /api/documents/:id/permissions`, `POST /api/documents/:id/permissions`, and `DELETE /api/documents/:id/permissions/:userId`.
+- Mounted documents router at `/api/documents` in `apps/api/src/server.ts`.
+- Created comprehensive test suite in `apps/api/src/documents.test.ts` with 16 automated security tests.
+
+**Developer review and decisions:**
+- Approved schema inspection and pre-implementation architecture report.
+- Mandated that clients can never choose `storage_key` (generated server-side) and that file upload/storage belongs to Phase 6.
+- Mandated that duplicate active grants are rejected with `409 Conflict` rather than silent permission mutation.
+- Mandated that transactional mutations must roll back if audit log insertion fails.
+- Mandated that non-owners cannot delete documents or manage permissions, and that revoked users immediately receive 404 on subsequent requests.
+
+**Verification:**
+- `npm run typecheck`: Passed with 0 errors across `@trustvault/api` and `@trustvault/web`.
+- `npm run build`: Passed cleanly for both API and client packages.
+- `npm run test`: All 38 tests passed across `auth.test.ts` (12), `server.test.ts` (10), and `documents.test.ts` (16).
+- `npm run db:check`: Confirmed active database connection to Supabase PostgreSQL.
+
+**Outcome:** Phase 5 fully implemented, verified, and documented.
+
+**Commit reference:** Add a real commit hash after committing Phase 5 changes.
+
+---
+
+## Entry 9 — Phase 5 Security Review and Concurrency Hardening
+
+**Date:** 2026-10-22
+**Task:** Conduct a formal security review and hardening of the Phase 5 Document and Permission Engine.
+
+**Prompt summary:** Review and harden Phase 5 implementation against cross-user isolation bypasses, TOCTOU race conditions in mutations, concurrent grant collisions on the partial unique index, self-grants, silent revocation failures, audit reliability, and missing test coverage without modifying the remote database or starting Phase 6.
+
+**AI assistance:**
+- Conducted an in-depth security inspection of `routes/documents.ts`, `audit.ts`, `validation.ts`, and migrations.
+- Identified and fixed an unhandled 500 error on concurrent grant collision by catching PostgreSQL unique constraint violation `code 23505` and mapping it to `409 Conflict`.
+- Hardened `PATCH /api/documents/:id` against TOCTOU authorization races by moving permission verification into an atomic conditional SQL update query (`WHERE ... AND (owner_id = $4 OR EXISTS (SELECT 1 FROM document_permissions WHERE permission = 'edit' AND revoked_at IS NULL))`), rolling back and returning 403 if permission was revoked before the update executed.
+- Hardened `DELETE /api/documents/:id` to atomically check ownership and non-deleted status in the SQL update.
+- Hardened `DELETE /api/documents/:id/permissions/:userId` to verify `result.rows.length === 0` on the transactional UPDATE, returning 404 rather than committing false success on repeated or concurrent revocation.
+- Added explicit self-grant prevention (`targetUser.id === userId || targetUser.id === doc.owner_id`) returning `400 Bad Request` with denied audit logging.
+- Added denied audit logging to `GET /api/documents/:id/permissions` when a document is unshared or not found, establishing consistent audit trail behavior.
+- Hardened `POST /api/documents/:id/permissions` against user account enumeration: combined non-existent and inactive target checks into a single generic `404 Not Found` response ("Target user not found or not eligible") with denied audit logging (`reason: "target_not_found_or_inactive"`).
+- Expanded `apps/api/src/documents.test.ts` from 16 to 30 automated tests (+14 new security tests).
+
+**Developer review and decisions:**
+- Confirmed that table RLS does not apply to Express backend queries using the `postgres` BYPASSRLS role; verified that Express-level authorization is strictly required on every operation.
+- Validated atomic conditional SQL updates to eliminate in-flight mutation races.
+- Ensured that denied requests never become authorized due to audit logging issues, and verified that all mutating operations roll back if audit log persistence fails.
+- Explicitly documented the exact concurrency boundary for in-flight requests versus requests following committed revocations.
+- Approved anti-enumeration hardening to prevent leaking user existence and account activation status.
+
+**Verification:**
+- `npm run check`: Exited with code `0`.
+  - Typecheck: passed across `@trustvault/api` and `@trustvault/web`.
+  - Production build: passed across `@trustvault/api` and `@trustvault/web`.
+  - Automated tests: 52 total tests passed (12 auth tests, 10 server tests, 30 document tests).
+  - Test framework: Vitest with Supertest using in-memory mock isolation. (Unit/mocked tests; no real PostgreSQL integration tests were executed).
+
+**Outcome:** Phase 5 security review and hardening completed, verified, and documented.
+
+**Commit reference:** Add a real commit hash after committing Phase 5 hardening.
 
 ---
 
