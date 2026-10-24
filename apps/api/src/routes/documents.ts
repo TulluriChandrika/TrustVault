@@ -74,8 +74,12 @@ function handleUploadMiddleware(req: Request, res: Response, next: (err?: any) =
 interface DocumentRow {
   id: string;
   owner_id: string;
+  owner_email?: string;
+  owner_name?: string | null;
+  shared_at?: string | null;
   title: string;
   category: string;
+  description?: string | null;
   storage_key: string;
   mime_type: string;
   size_bytes: string | number;
@@ -97,19 +101,24 @@ async function getDocumentWithAccess(
     SELECT 
       d.id,
       d.owner_id,
+      u.email AS owner_email,
+      u.full_name AS owner_name,
       d.title,
       d.category,
+      d.description,
       d.storage_key,
       d.mime_type,
       d.size_bytes,
       d.created_at,
       d.updated_at,
       d.deleted_at,
+      p.granted_at AS shared_at,
       CASE 
         WHEN d.owner_id = $1 THEN 'owner'
         ELSE p.permission
       END AS access_level
     FROM public.documents d
+    JOIN public.users u ON d.owner_id = u.id
     LEFT JOIN public.document_permissions p 
       ON d.id = p.document_id 
       AND p.user_id = $1 
@@ -124,36 +133,71 @@ async function getDocumentWithAccess(
 /**
  * GET /api/documents
  * List all active documents owned by or actively shared with the authenticated user.
+ * Supports optional search query (q or search) across filename, category, description, and owner info.
+ * Supports optional view filter ('all', 'owned', 'shared').
  */
 documentsRouter.get("/", async (req: Request, res: Response): Promise<void> => {
   const userId = req.user!.id;
+  const searchQuery = typeof req.query.q === "string" 
+    ? req.query.q.trim() 
+    : typeof req.query.search === "string" 
+      ? req.query.search.trim() 
+      : "";
+  const view = typeof req.query.view === "string" ? req.query.view.trim().toLowerCase() : "all";
 
   try {
-    const query = `
+    let query = `
       SELECT 
         d.id,
         d.owner_id,
+        u.email AS owner_email,
+        u.full_name AS owner_name,
         d.title,
         d.category,
+        d.description,
         d.mime_type,
         d.size_bytes,
         d.created_at,
         d.updated_at,
+        p.granted_at AS shared_at,
         CASE 
           WHEN d.owner_id = $1 THEN 'owner'
           ELSE p.permission
         END AS access_level
       FROM public.documents d
+      JOIN public.users u ON d.owner_id = u.id
       LEFT JOIN public.document_permissions p 
         ON d.id = p.document_id 
         AND p.user_id = $1 
         AND p.revoked_at IS NULL
       WHERE d.deleted_at IS NULL
-        AND (d.owner_id = $1 OR p.id IS NOT NULL)
-      ORDER BY d.created_at DESC;
     `;
 
-    const result = await pool.query(query, [userId]);
+    const params: any[] = [userId];
+
+    if (view === "owned" || view === "my-documents") {
+      query += " AND d.owner_id = $1";
+    } else if (view === "shared" || view === "shared-with-me") {
+      query += " AND d.owner_id != $1 AND p.id IS NOT NULL";
+    } else {
+      query += " AND (d.owner_id = $1 OR p.id IS NOT NULL)";
+    }
+
+    if (searchQuery.length > 0) {
+      params.push(`%${searchQuery}%`);
+      const searchParamIdx = params.length;
+      query += ` AND (
+        d.title ILIKE $${searchParamIdx}
+        OR d.category ILIKE $${searchParamIdx}
+        OR (d.description IS NOT NULL AND d.description ILIKE $${searchParamIdx})
+        OR (u.full_name IS NOT NULL AND u.full_name ILIKE $${searchParamIdx})
+        OR u.email ILIKE $${searchParamIdx}
+      )`;
+    }
+
+    query += " ORDER BY d.created_at DESC;";
+
+    const result = await pool.query(query, params);
     res.json({ documents: result.rows });
   } catch (err: unknown) {
     console.error("Error listing documents:", err);
@@ -225,6 +269,12 @@ documentsRouter.post(
         return;
       }
 
+      const description = sanitizeString(body.description) || null;
+      if (description && description.length > 1000) {
+        res.status(400).json({ error: "Description must not exceed 1000 characters" });
+        return;
+      }
+
       // Generate unpredictable server-side storage key
       const storageKey = `private/${userId}/${crypto.randomUUID()}.${fileValidation.extension}`;
       const bucketName = process.env.STORAGE_BUCKET_NAME || "trustvault-private";
@@ -274,15 +324,16 @@ documentsRouter.post(
         await client.query("BEGIN");
 
         const insertQuery = `
-          INSERT INTO public.documents (owner_id, title, category, storage_key, mime_type, size_bytes)
-          VALUES ($1, $2, $3, $4, $5, $6)
-          RETURNING id, owner_id, title, category, mime_type, size_bytes, created_at, updated_at;
+          INSERT INTO public.documents (owner_id, title, category, description, storage_key, mime_type, size_bytes)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          RETURNING id, owner_id, title, category, description, mime_type, size_bytes, created_at, updated_at;
         `;
 
         const result = await client.query(insertQuery, [
           userId,
           title,
           category,
+          description,
           storageKey,
           fileValidation.detectedMimeType,
           req.file.size,
@@ -474,6 +525,12 @@ documentsRouter.post(
       return;
     }
 
+    const description = sanitizeString(body.description) || null;
+    if (description && description.length > 1000) {
+      res.status(400).json({ error: "Description must not exceed 1000 characters" });
+      return;
+    }
+
     const mimeType = sanitizeString(body.mime_type) || "application/octet-stream";
     let sizeBytes = typeof body.size_bytes === "number" ? body.size_bytes : 1;
     if (sizeBytes <= 0) {
@@ -488,15 +545,16 @@ documentsRouter.post(
       await client.query("BEGIN");
 
       const insertQuery = `
-        INSERT INTO public.documents (owner_id, title, category, storage_key, mime_type, size_bytes)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING id, owner_id, title, category, mime_type, size_bytes, created_at, updated_at;
+        INSERT INTO public.documents (owner_id, title, category, description, storage_key, mime_type, size_bytes)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING id, owner_id, title, category, description, mime_type, size_bytes, created_at, updated_at;
       `;
 
       const result = await client.query(insertQuery, [
         userId,
         title,
         category,
+        description,
         storageKey,
         mimeType,
         sizeBytes,
@@ -530,6 +588,74 @@ documentsRouter.post(
     }
   }
 );
+
+/**
+ * GET /api/documents/activity
+ * Retrieve authorized activity/audit events for the authenticated user.
+ * Strictly enforces document-level authorization: users see activity ONLY for documents
+ * they own (including actions performed by authorized shared users on those documents).
+ * Non-owners never see audit logs of documents owned by someone else.
+ */
+documentsRouter.get("/activity", async (req: Request, res: Response): Promise<void> => {
+  const userId = req.user!.id;
+  const documentId = req.query.document_id ? String(req.query.document_id).trim() : null;
+
+  if (documentId) {
+    if (!isValidUUID(documentId)) {
+      res.status(400).json({ error: "Invalid document ID format" });
+      return;
+    }
+    // Verify caller owns this document without leaking existence to unauthorized users
+    const ownerCheck = await pool.query(
+      "SELECT id FROM public.documents WHERE id = $1 AND owner_id = $2",
+      [documentId, userId]
+    );
+    if (ownerCheck.rows.length === 0) {
+      res.status(404).json({ error: "Document not found" });
+      return;
+    }
+  }
+
+  const limit = Math.min(Math.max(parseInt(String(req.query.limit || 50), 10) || 50, 1), 100);
+  const offset = Math.max(parseInt(String(req.query.offset || 0), 10) || 0, 0);
+
+  try {
+    const queryParams: any[] = [userId];
+    let query = `
+      SELECT 
+        a.id,
+        a.actor_id,
+        u.email AS actor_email,
+        u.full_name AS actor_name,
+        a.document_id,
+        COALESCE(d.title, (a.details->>'previous_title'), (a.details->>'title')) AS document_title,
+        a.action,
+        a.outcome,
+        a.details,
+        a.created_at
+      FROM public.audit_logs a
+      LEFT JOIN public.users u ON a.actor_id = u.id
+      LEFT JOIN public.documents d ON a.document_id = d.id
+      WHERE a.document_id IN (
+        SELECT id FROM public.documents WHERE owner_id = $1
+      )
+    `;
+
+    if (documentId) {
+      queryParams.push(documentId);
+      query += ` AND a.document_id = $${queryParams.length}`;
+    }
+
+    queryParams.push(limit, offset);
+    query += ` ORDER BY a.created_at DESC, a.id DESC LIMIT $${queryParams.length - 1} OFFSET $${queryParams.length};`;
+
+    const result = await pool.query(query, queryParams);
+    res.json({ logs: result.rows });
+  } catch (err: unknown) {
+    console.error("Error fetching activity logs:", err);
+    res.status(500).json({ error: "Failed to fetch activity logs" });
+  }
+});
 
 /**
  * GET /api/documents/:id
@@ -573,8 +699,12 @@ documentsRouter.get("/:id", async (req: Request, res: Response): Promise<void> =
       document: {
         id: doc.id,
         owner_id: doc.owner_id,
+        owner_email: doc.owner_email,
+        owner_name: doc.owner_name,
+        shared_at: doc.shared_at,
         title: doc.title,
         category: doc.category,
+        description: doc.description,
         mime_type: doc.mime_type,
         size_bytes: doc.size_bytes,
         created_at: doc.created_at,
@@ -707,7 +837,7 @@ documentsRouter.get("/:id/download", async (req: Request, res: Response): Promis
 
 /**
  * PATCH /api/documents/:id
- * Update allowed metadata (title, category). Allowed for owner and active editors.
+ * Update allowed metadata (title, category, description). Allowed for owner and active editors.
  */
 documentsRouter.patch("/:id", async (req: Request, res: Response): Promise<void> => {
   const userId = req.user!.id;
@@ -767,9 +897,10 @@ documentsRouter.patch("/:id", async (req: Request, res: Response): Promise<void>
     // Only owner or editor reach here
     const hasTitle = "title" in body;
     const hasCategory = "category" in body;
+    const hasDescription = "description" in body;
 
-    if (!hasTitle && !hasCategory) {
-      res.status(400).json({ error: "At least one editable field ('title' or 'category') must be provided" });
+    if (!hasTitle && !hasCategory && !hasDescription) {
+      res.status(400).json({ error: "At least one editable field ('title', 'category', or 'description') must be provided" });
       return;
     }
 
@@ -791,6 +922,19 @@ documentsRouter.patch("/:id", async (req: Request, res: Response): Promise<void>
       }
     }
 
+    let newDescription: string | null = null;
+    if (hasDescription) {
+      if (body.description === null || body.description === "") {
+        newDescription = null;
+      } else {
+        newDescription = sanitizeString(body.description);
+        if (newDescription && newDescription.length > 1000) {
+          res.status(400).json({ error: "Description must not exceed 1000 characters" });
+          return;
+        }
+      }
+    }
+
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
@@ -801,23 +945,32 @@ documentsRouter.patch("/:id", async (req: Request, res: Response): Promise<void>
       const updateQuery = `
         UPDATE public.documents d
         SET title = COALESCE($1, d.title),
-            category = COALESCE($2, d.category)
-        WHERE d.id = $3 
+            category = COALESCE($2, d.category),
+            description = CASE WHEN $3::boolean THEN $4 ELSE d.description END,
+            updated_at = now()
+        WHERE d.id = $5 
           AND d.deleted_at IS NULL
           AND (
-            d.owner_id = $4
+            d.owner_id = $6
             OR EXISTS (
               SELECT 1 FROM public.document_permissions p
               WHERE p.document_id = d.id 
-                AND p.user_id = $4 
+                AND p.user_id = $6 
                 AND p.permission = 'edit' 
                 AND p.revoked_at IS NULL
             )
           )
-        RETURNING d.id, d.owner_id, d.title, d.category, d.mime_type, d.size_bytes, d.created_at, d.updated_at;
+        RETURNING d.id, d.owner_id, d.title, d.category, d.description, d.mime_type, d.size_bytes, d.created_at, d.updated_at;
       `;
 
-      const result = await client.query(updateQuery, [newTitle, newCategory, documentId, userId]);
+      const result = await client.query(updateQuery, [
+        newTitle,
+        newCategory,
+        hasDescription,
+        newDescription,
+        documentId,
+        userId,
+      ]);
       const updatedDoc = result.rows[0];
 
       if (!updatedDoc) {
@@ -833,19 +986,53 @@ documentsRouter.patch("/:id", async (req: Request, res: Response): Promise<void>
         return;
       }
 
-      await recordAuditLog({
-        actorId: userId,
-        documentId: doc.id,
-        action: "document:update",
-        outcome: "success",
-        details: {
-          updatedFields: {
-            ...(newTitle !== null ? { title: newTitle } : {}),
-            ...(newCategory !== null ? { category: newCategory } : {}),
+      const isRenamed = newTitle !== null && newTitle !== doc.title;
+      const isMetadataUpdated =
+        (newCategory !== null && newCategory !== doc.category) ||
+        (hasDescription && (newDescription ?? null) !== (doc.description ?? null));
+
+      if (isRenamed) {
+        await recordAuditLog({
+          actorId: userId,
+          documentId: doc.id,
+          action: "document:rename",
+          outcome: "success",
+          details: {
+            previous_title: doc.title,
+            new_title: newTitle,
           },
-        },
-        client,
-      });
+          client,
+        });
+      }
+
+      if (isMetadataUpdated) {
+        await recordAuditLog({
+          actorId: userId,
+          documentId: doc.id,
+          action: "document:update",
+          outcome: "success",
+          details: {
+            previous_category: doc.category,
+            new_category: newCategory ?? doc.category,
+            previous_description: doc.description ?? null,
+            new_description: hasDescription ? newDescription : (doc.description ?? null),
+          },
+          client,
+        });
+      }
+
+      if (!isRenamed && !isMetadataUpdated) {
+        await recordAuditLog({
+          actorId: userId,
+          documentId: doc.id,
+          action: "document:update",
+          outcome: "success",
+          details: {
+            updatedFields: {},
+          },
+          client,
+        });
+      }
 
       await client.query("COMMIT");
 
@@ -1233,7 +1420,10 @@ documentsRouter.delete(
       }
 
       const activeGrant = await pool.query(
-        "SELECT id, permission FROM public.document_permissions WHERE document_id = $1 AND user_id = $2 AND revoked_at IS NULL",
+        `SELECT p.id, p.permission, u.email AS target_email 
+         FROM public.document_permissions p
+         JOIN public.users u ON p.user_id = u.id
+         WHERE p.document_id = $1 AND p.user_id = $2 AND p.revoked_at IS NULL`,
         [documentId, targetUserId]
       );
 
@@ -1241,6 +1431,8 @@ documentsRouter.delete(
         res.status(404).json({ error: "No active permission grant found for this user" });
         return;
       }
+
+      const targetEmail = activeGrant.rows[0].target_email || "";
 
       const client = await pool.connect();
       try {
@@ -1262,7 +1454,7 @@ documentsRouter.delete(
           documentId: doc.id,
           action: "permission:revoke",
           outcome: "success",
-          details: { targetUserId },
+          details: { targetUserId, targetEmail },
           client,
         });
 
@@ -1282,3 +1474,125 @@ documentsRouter.delete(
     }
   }
 );
+
+/**
+ * PATCH /api/documents/:id/permissions/:userId
+ * Update an active permission grant ('read' <-> 'edit'). Restricted strictly to the document owner.
+ */
+documentsRouter.patch(
+  "/:id/permissions/:userId",
+  async (req: Request, res: Response): Promise<void> => {
+    const userId = req.user!.id;
+    const documentId = req.params.id;
+    const targetUserId = req.params.userId;
+    const body = req.body || {};
+
+    if (!isValidUUID(documentId) || !isValidUUID(targetUserId)) {
+      res.status(400).json({ error: "Invalid UUID format" });
+      return;
+    }
+
+    const permission = body.permission;
+    if (permission !== "read" && permission !== "edit") {
+      res.status(400).json({ error: "Invalid permission: must be 'read' or 'edit'" });
+      return;
+    }
+
+    try {
+      const doc = await getDocumentWithAccess(documentId, userId);
+
+      if (!doc || !doc.access_level) {
+        await recordAuditLog({
+          actorId: userId,
+          documentId,
+          action: "permission:update",
+          outcome: "denied",
+          details: { reason: "not_found_or_unauthorized" },
+        });
+        res.status(404).json({ error: "Document not found" });
+        return;
+      }
+
+      if (doc.access_level !== "owner") {
+        await recordAuditLog({
+          actorId: userId,
+          documentId: doc.id,
+          action: "permission:update",
+          outcome: "denied",
+          details: { reason: "non_owner_update_attempt", callerAccess: doc.access_level },
+        });
+        res.status(403).json({ error: "Only the document owner can update permissions" });
+        return;
+      }
+
+      const activeGrant = await pool.query(
+        "SELECT id, permission FROM public.document_permissions WHERE document_id = $1 AND user_id = $2 AND revoked_at IS NULL",
+        [documentId, targetUserId]
+      );
+
+      if (activeGrant.rows.length === 0) {
+        res.status(404).json({ error: "No active permission grant found for this user" });
+        return;
+      }
+
+      const targetUserRes = await pool.query(
+        "SELECT id, email FROM public.users WHERE id = $1",
+        [targetUserId]
+      );
+      const targetEmail = targetUserRes.rows[0]?.email || "";
+
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+
+        const updateResult = await client.query(
+          `UPDATE public.document_permissions 
+           SET permission = $1 
+           WHERE document_id = $2 AND user_id = $3 AND revoked_at IS NULL 
+           RETURNING id, document_id, user_id, permission, granted_by, granted_at;`,
+          [permission, documentId, targetUserId]
+        );
+
+        if (updateResult.rows.length === 0) {
+          await client.query("ROLLBACK");
+          res.status(404).json({ error: "No active permission grant found for this user" });
+          return;
+        }
+
+        const updatedGrant = updateResult.rows[0];
+
+        await recordAuditLog({
+          actorId: userId,
+          documentId: doc.id,
+          action: "permission:update",
+          outcome: "success",
+          details: {
+            targetUserId,
+            previousPermission: activeGrant.rows[0].permission,
+            newPermission: permission,
+          },
+          client,
+        });
+
+        await client.query("COMMIT");
+
+        res.json({
+          permission: {
+            ...updatedGrant,
+            user_email: targetEmail,
+          },
+        });
+      } catch (err: unknown) {
+        await client.query("ROLLBACK");
+        console.error("Error updating permission:", err);
+        res.status(500).json({ error: "Failed to update permission" });
+      } finally {
+        client.release();
+      }
+    } catch (err: unknown) {
+      console.error("Error in update permission route:", err);
+      res.status(500).json({ error: "Failed to process permission update" });
+    }
+  }
+);
+

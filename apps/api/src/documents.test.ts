@@ -2850,4 +2850,113 @@ describe("Phase 6: Secure Document Lifecycle & Private Storage", () => {
     // Ensure no replacement characters from split surrogates
     expect(disposition).not.toContain("\uFFFD");
   });
+
+  // Test 76: Owner can update an existing permission from read to edit
+  it("allows owner to update active permission grant from read to edit", async () => {
+    authenticateAs({ id: OWNER_ID, email: "owner@example.com" });
+
+    // 1. Doc check -> owner
+    queueDocQuery({
+      rows: [
+        {
+          id: DOC_ID,
+          owner_id: OWNER_ID,
+          deleted_at: null,
+          access_level: "owner",
+        },
+      ],
+    });
+
+    // 2. Active grant check -> exists as 'read'
+    queueDocQuery({
+      rows: [{ id: "grant-1", permission: "read" }],
+    });
+
+    // 3. Target user email lookup
+    queueDocQuery({
+      rows: [{ id: READER_ID, email: "reader@example.com" }],
+    });
+
+    // 4. Transactional update
+    mockClientQuery.mockImplementation((sql: string) => {
+      if (sql.includes("UPDATE public.document_permissions")) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: "grant-1",
+              document_id: DOC_ID,
+              user_id: READER_ID,
+              permission: "edit",
+              granted_by: OWNER_ID,
+              granted_at: new Date().toISOString(),
+            },
+          ],
+        });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+
+    const res = await request(app)
+      .patch(`/api/documents/${DOC_ID}/permissions/${READER_ID}`)
+      .set("Authorization", "Bearer valid-owner-token")
+      .send({ permission: "edit" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.permission.permission).toBe("edit");
+    expect(res.body.permission.user_email).toBe("reader@example.com");
+  });
+
+  // Test 77: Non-owner cannot update permissions
+  it("rejects non-owner attempts to update permission grants with 403", async () => {
+    authenticateAs({ id: STRANGER_ID, email: "stranger@example.com" });
+
+    queueDocQuery({
+      rows: [
+        {
+          id: DOC_ID,
+          owner_id: OWNER_ID,
+          deleted_at: null,
+          access_level: "read",
+        },
+      ],
+    });
+
+    const res = await request(app)
+      .patch(`/api/documents/${DOC_ID}/permissions/${READER_ID}`)
+      .set("Authorization", "Bearer stranger-token")
+      .send({ permission: "edit" });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/Only the document owner can update permissions/i);
+  });
+
+  // Test 78: User can retrieve their activity log
+  it("allows user to retrieve their authorized activity logs", async () => {
+    authenticateAs({ id: OWNER_ID, email: "owner@example.com" });
+
+    queueDocQuery({
+      rows: [
+        {
+          id: 1,
+          actor_id: OWNER_ID,
+          actor_email: "owner@example.com",
+          document_id: DOC_ID,
+          document_title: "Confidential.pdf",
+          action: "file:download",
+          outcome: "success",
+          details: {},
+          created_at: new Date().toISOString(),
+        },
+      ],
+    });
+
+    const res = await request(app)
+      .get("/api/documents/activity")
+      .set("Authorization", "Bearer valid-owner-token");
+
+    expect(res.status).toBe(200);
+    expect(res.body.logs).toHaveLength(1);
+    expect(res.body.logs[0].action).toBe("file:download");
+  });
 });
+

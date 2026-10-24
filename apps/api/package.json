@@ -31,6 +31,7 @@
     "typecheck": "tsc --noEmit",
     "start": "node dist/server.js",
     "test": "vitest run",
-    "db:check": "tsx src/db/check-connection.ts"
+    "db:check": "tsx src/db/check-connection.ts",
+    "seed:admin": "tsx scripts/seed-admin.ts"
   }
 }

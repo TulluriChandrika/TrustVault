@@ -209,6 +209,8 @@ adminAuditRouter.get("/", async (req: Request, res: Response): Promise<void> => 
 
     res.json({
       audit_logs: dataResult.rows,
+      logs: dataResult.rows,
+      total,
       pagination: {
         total,
         limit,

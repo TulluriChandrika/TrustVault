@@ -41,12 +41,18 @@ app.use(
 // Parse JSON request bodies (limit protects against oversized payloads)
 app.use(express.json({ limit: "2mb" }));
 
-// CORS — allow configured frontend origin, reject unauthorized origins
+// CORS — allow configured frontend origin, localhost, and 127.0.0.1
+const allowedOrigins = new Set([
+  FRONTEND_ORIGIN,
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+]);
+
 app.use(
   cors({
     origin: (origin, callback) => {
       // Allow requests with no origin (such as curl, mobile, or server-to-server)
-      if (!origin || origin === FRONTEND_ORIGIN) {
+      if (!origin || allowedOrigins.has(origin)) {
         callback(null, true);
       } else {
         callback(null, false);
@@ -151,4 +157,5 @@ if (process.env.NODE_ENV !== "test") {
   process.on("SIGTERM", () => shutdown("SIGTERM"));
 }
 
+export { app };
 export default app;

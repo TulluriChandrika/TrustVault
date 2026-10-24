@@ -5,7 +5,8 @@ import { getSupabaseAdmin } from "../supabase.js";
 export interface AuthenticatedUser {
   id: string;
   email: string;
-  role: "admin" | "owner" | "viewer";
+  full_name?: string | null;
+  role: "admin" | "user" | "owner" | "viewer";
   is_active: boolean;
   created_at: string;
 }
@@ -45,7 +46,7 @@ export async function requireAuth(
 
   const token = parts[1].trim();
 
-  let authUser: { id: string; email?: string } | null = null;
+  let authUser: { id: string; email?: string; full_name?: string | null } | null = null;
 
   try {
     const supabase = getSupabaseAdmin();
@@ -59,9 +60,14 @@ export async function requireAuth(
       return;
     }
 
+    const fullName =
+      ((user.user_metadata?.full_name || user.user_metadata?.name || "") as string).trim() ||
+      null;
+
     authUser = {
       id: user.id,
       email: user.email,
+      full_name: fullName,
     };
   } catch (err: unknown) {
     res.status(401).json({ error: "Invalid or expired authentication token" });
@@ -75,18 +81,23 @@ export async function requireAuth(
 
   try {
     // Idempotent user provisioning:
-    // 1. If user doesn't exist, insert with default role 'owner' and is_active = true.
-    // 2. If user already exists, update email in case it changed in Supabase Auth,
-    //    WITHOUT touching the existing role or is_active status.
+    // 1. If user doesn't exist, insert with default role 'user' and is_active = true.
+    // 2. If user already exists, update email and full_name in case it changed in Supabase Auth,
+    //    WITHOUT touching the existing role or is_active status (prevents privilege escalation).
     const query = `
-      INSERT INTO public.users (id, email, password_hash, role, is_active)
-      VALUES ($1, $2, 'SUPABASE_AUTH_MANAGED', 'owner', true)
+      INSERT INTO public.users (id, email, full_name, password_hash, role, is_active)
+      VALUES ($1, $2, $3, 'SUPABASE_AUTH_MANAGED', 'user', true)
       ON CONFLICT (id) DO UPDATE
-      SET email = EXCLUDED.email
-      RETURNING id, email, role, is_active, created_at;
+      SET email = EXCLUDED.email,
+          full_name = COALESCE(EXCLUDED.full_name, public.users.full_name)
+      RETURNING id, email, full_name, role, is_active, created_at;
     `;
 
-    const result = await pool.query(query, [authUser.id, authUser.email]);
+    const result = await pool.query(query, [
+      authUser.id,
+      authUser.email,
+      authUser.full_name || null,
+    ]);
     const dbUser = result.rows[0];
 
     // Check account active status
@@ -98,6 +109,7 @@ export async function requireAuth(
     req.user = {
       id: dbUser.id,
       email: dbUser.email,
+      full_name: dbUser.full_name || authUser.full_name || null,
       role: dbUser.role,
       is_active: dbUser.is_active,
       created_at: dbUser.created_at,
