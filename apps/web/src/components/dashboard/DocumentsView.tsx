@@ -59,85 +59,126 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const [viewMode, setViewMode] = useState<"table" | "grid">("table");
 
   // Floating Portal Overflow Menu State
-  const [menuAnchor, setMenuAnchor] = useState<{
+  interface FloatingMenuState {
     doc: DocumentItem;
     triggerEl: HTMLElement;
-  } | null>(null);
-  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
+    position: { top: number; left: number };
+  }
+
+  const calculateMenuPosition = useCallback(
+    (
+      triggerEl: HTMLElement,
+      menuEl: HTMLElement | null,
+      isOwner: boolean
+    ): { top: number; left: number } => {
+      const rect = triggerEl.getBoundingClientRect();
+      const menuWidth = menuEl ? menuEl.offsetWidth : 160;
+      // Owner has 3 actions (~122px); Non-owner (editor) has 1 action (~44px)
+      const menuHeight = menuEl ? menuEl.offsetHeight : isOwner ? 122 : 44;
+
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+
+      // Align right edge of menu with right edge of trigger button
+      let left = rect.right - menuWidth;
+      if (left < 8) {
+        left = 8;
+      } else if (left + menuWidth > viewportWidth - 8) {
+        left = viewportWidth - menuWidth - 8;
+      }
+
+      // Default to placing below button; if it would overflow bottom, flip above
+      let top = rect.bottom + 4;
+      if (top + menuHeight > viewportHeight - 8) {
+        const topAbove = rect.top - menuHeight - 4;
+        if (topAbove >= 8) {
+          top = topAbove;
+        } else {
+          top = Math.max(8, viewportHeight - menuHeight - 8);
+        }
+      }
+
+      return { top, left };
+    },
+    []
+  );
+
+  const [floatingMenu, setFloatingMenu] = useState<FloatingMenuState | null>(null);
   const portalMenuRef = useRef<HTMLDivElement>(null);
 
-  // Measure and align the floating portal menu relative to the trigger button
-  const updateMenuPosition = useCallback(() => {
-    if (!menuAnchor) {
-      setMenuPosition(null);
-      return;
-    }
-
-    const rect = menuAnchor.triggerEl.getBoundingClientRect();
-    const menuEl = portalMenuRef.current;
-    const menuWidth = menuEl ? menuEl.offsetWidth : 160;
-    const menuHeight = menuEl ? menuEl.offsetHeight : 120;
-
-    const viewportWidth = window.innerWidth;
-    const viewportHeight = window.innerHeight;
-
-    // Align right edge of menu with right edge of trigger button
-    let left = rect.right - menuWidth;
-    if (left < 8) {
-      left = 8;
-    } else if (left + menuWidth > viewportWidth - 8) {
-      left = viewportWidth - menuWidth - 8;
-    }
-
-    // Default to placing below button; if it would overflow bottom, flip above
-    let top = rect.bottom + 4;
-    if (top + menuHeight > viewportHeight - 8) {
-      const topAbove = rect.top - menuHeight - 4;
-      if (topAbove >= 8) {
-        top = topAbove;
-      } else {
-        top = Math.max(8, viewportHeight - menuHeight - 8);
+  const handleToggleMenu = useCallback(
+    (doc: DocumentItem, triggerEl: HTMLElement) => {
+      if (floatingMenu?.doc.id === doc.id) {
+        setFloatingMenu(null);
+        return;
       }
-    }
+      const isOwner = doc.owner_id === profile?.id || doc.access_level === "owner";
+      const initialPos = calculateMenuPosition(triggerEl, null, isOwner);
+      setFloatingMenu({
+        doc,
+        triggerEl,
+        position: initialPos,
+      });
+    },
+    [calculateMenuPosition, floatingMenu?.doc.id, profile?.id]
+  );
 
-    setMenuPosition({ top, left });
-  }, [menuAnchor]);
-
+  // Synchronously measure and refine position before browser paint if element dimensions differ
   useLayoutEffect(() => {
-    updateMenuPosition();
-  }, [updateMenuPosition]);
+    if (!floatingMenu || !portalMenuRef.current) return;
+
+    const isOwner =
+      floatingMenu.doc.owner_id === profile?.id ||
+      floatingMenu.doc.access_level === "owner";
+    const refinedPos = calculateMenuPosition(
+      floatingMenu.triggerEl,
+      portalMenuRef.current,
+      isOwner
+    );
+
+    if (
+      refinedPos.top !== floatingMenu.position.top ||
+      refinedPos.left !== floatingMenu.position.left
+    ) {
+      setFloatingMenu((prev) =>
+        prev && prev.doc.id === floatingMenu.doc.id
+          ? { ...prev, position: refinedPos }
+          : prev
+      );
+    }
+  }, [calculateMenuPosition, floatingMenu?.doc.id, floatingMenu?.triggerEl, profile?.id]);
 
   // Close floating menu if the relevant document is removed from document list
   useEffect(() => {
-    if (menuAnchor && !documents.some((d) => d.id === menuAnchor.doc.id)) {
-      setMenuAnchor(null);
+    if (floatingMenu && !documents.some((d) => d.id === floatingMenu.doc.id)) {
+      setFloatingMenu(null);
     }
-  }, [documents, menuAnchor]);
+  }, [documents, floatingMenu]);
 
   // Handle outside clicks, Escape key, and scroll/resize dismissal
   useEffect(() => {
-    if (!menuAnchor) return;
+    if (!floatingMenu) return;
 
     const handlePointerDown = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null;
-      if (menuAnchor.triggerEl.contains(target)) {
+      if (floatingMenu.triggerEl.contains(target)) {
         return;
       }
       if (portalMenuRef.current && portalMenuRef.current.contains(target)) {
         return;
       }
-      setMenuAnchor(null);
+      setFloatingMenu(null);
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        setMenuAnchor(null);
-        menuAnchor.triggerEl.focus();
+        setFloatingMenu(null);
+        floatingMenu.triggerEl.focus();
       }
     };
 
     const handleScrollOrResize = () => {
-      setMenuAnchor(null);
+      setFloatingMenu(null);
     };
 
     document.addEventListener("mousedown", handlePointerDown);
@@ -151,15 +192,17 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       window.removeEventListener("scroll", handleScrollOrResize, true);
       window.removeEventListener("resize", handleScrollOrResize);
     };
-  }, [menuAnchor]);
+  }, [floatingMenu]);
 
   // Focus first menu item when opened for keyboard accessibility
   useEffect(() => {
-    if (menuAnchor && portalMenuRef.current) {
-      const firstButton = portalMenuRef.current.querySelector<HTMLButtonElement>("button:not([disabled])");
+    if (floatingMenu && portalMenuRef.current) {
+      const firstButton = portalMenuRef.current.querySelector<HTMLButtonElement>(
+        "button:not([disabled])"
+      );
       firstButton?.focus();
     }
-  }, [menuAnchor, menuPosition]);
+  }, [floatingMenu?.doc.id]);
 
   // Keyboard navigation within the floating menu (ArrowDown/ArrowUp)
   const handleMenuKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -530,17 +573,13 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                if (menuAnchor?.doc.id === doc.id) {
-                                  setMenuAnchor(null);
-                                } else {
-                                  setMenuAnchor({ doc, triggerEl: e.currentTarget });
-                                }
+                                handleToggleMenu(doc, e.currentTarget);
                               }}
                               aria-label={`More actions for ${doc.title}`}
                               aria-haspopup="true"
-                              aria-expanded={menuAnchor?.doc.id === doc.id}
+                              aria-expanded={floatingMenu?.doc.id === doc.id}
                               className={`p-1.5 rounded-lg border transition-all inline-flex items-center ${
-                                menuAnchor?.doc.id === doc.id
+                                floatingMenu?.doc.id === doc.id
                                   ? "border-[#6153CC] bg-[#F1F3FD] text-[#6153CC]"
                                   : "border-[#E2E0F2] hover:bg-[#F6F8FD] text-[#8A93B6] hover:text-[#101936]"
                               }`}
@@ -668,17 +707,13 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          if (menuAnchor?.doc.id === doc.id) {
-                            setMenuAnchor(null);
-                          } else {
-                            setMenuAnchor({ doc, triggerEl: e.currentTarget });
-                          }
+                          handleToggleMenu(doc, e.currentTarget);
                         }}
                         aria-label={`More actions for ${doc.title}`}
                         aria-haspopup="true"
-                        aria-expanded={menuAnchor?.doc.id === doc.id}
+                        aria-expanded={floatingMenu?.doc.id === doc.id}
                         className={`p-1.5 rounded-lg border transition-all inline-flex items-center ${
-                          menuAnchor?.doc.id === doc.id
+                          floatingMenu?.doc.id === doc.id
                             ? "border-[#6153CC] bg-[#F1F3FD] text-[#6153CC]"
                             : "border-[#E2E0F2] hover:bg-[#F6F8FD] text-[#8A93B6] hover:text-[#101936]"
                         }`}
@@ -695,32 +730,31 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       )}
 
       {/* Floating Portal Overflow Menu rendered directly into document.body */}
-      {menuAnchor &&
+      {floatingMenu &&
         typeof document !== "undefined" &&
         createPortal(
           <div
             ref={portalMenuRef}
             role="menu"
             aria-orientation="vertical"
-            aria-label={`Actions for ${menuAnchor.doc.title}`}
+            aria-label={`Actions for ${floatingMenu.doc.title}`}
             onKeyDown={handleMenuKeyDown}
             onClick={(e) => e.stopPropagation()}
             style={{
               position: "fixed",
-              top: menuPosition ? `${menuPosition.top}px` : "-9999px",
-              left: menuPosition ? `${menuPosition.left}px` : "-9999px",
-              visibility: menuPosition ? "visible" : "hidden",
+              top: `${floatingMenu.position.top}px`,
+              left: `${floatingMenu.position.left}px`,
               zIndex: 9999,
             }}
-            className="w-40 rounded-xl bg-white border border-[#E8E6F8] shadow-2xl py-1 text-left animate-in fade-in zoom-in-95 duration-100"
+            className="w-40 rounded-xl bg-white border border-[#E8E6F8] shadow-2xl py-1 text-left origin-top-right animate-in fade-in zoom-in-95 duration-100"
           >
-            {(menuAnchor.doc.owner_id === profile?.id || menuAnchor.doc.access_level === "owner") && (
+            {(floatingMenu.doc.owner_id === profile?.id || floatingMenu.doc.access_level === "owner") && (
               <button
                 type="button"
                 role="menuitem"
                 onClick={() => {
-                  const doc = menuAnchor.doc;
-                  setMenuAnchor(null);
+                  const doc = floatingMenu.doc;
+                  setFloatingMenu(null);
                   onOpenEdit(doc, "details");
                 }}
                 className="w-full px-3 py-2 text-[11.5px] font-medium text-[#101936] hover:bg-[#F6F8FD] focus:bg-[#F6F8FD] focus:outline-none flex items-center gap-2 transition-colors cursor-pointer"
@@ -734,8 +768,8 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               type="button"
               role="menuitem"
               onClick={() => {
-                const doc = menuAnchor.doc;
-                setMenuAnchor(null);
+                const doc = floatingMenu.doc;
+                setFloatingMenu(null);
                 onOpenEdit(doc, "rename");
               }}
               className="w-full px-3 py-2 text-[11.5px] font-medium text-[#101936] hover:bg-[#F6F8FD] focus:bg-[#F6F8FD] focus:outline-none flex items-center gap-2 transition-colors cursor-pointer"
@@ -744,16 +778,16 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               <span>Rename</span>
             </button>
 
-            {(menuAnchor.doc.owner_id === profile?.id || menuAnchor.doc.access_level === "owner") && (
+            {(floatingMenu.doc.owner_id === profile?.id || floatingMenu.doc.access_level === "owner") && (
               <button
                 type="button"
                 role="menuitem"
                 onClick={() => {
-                  const doc = menuAnchor.doc;
-                  setMenuAnchor(null);
+                  const doc = floatingMenu.doc;
+                  setFloatingMenu(null);
                   onDelete(doc);
                 }}
-                disabled={deletingId === menuAnchor.doc.id}
+                disabled={deletingId === floatingMenu.doc.id}
                 className="w-full px-3 py-2 text-[11.5px] font-medium text-rose-600 hover:bg-rose-50 focus:bg-rose-50 focus:outline-none flex items-center gap-2 border-t border-[#E8E6F8] mt-1 transition-colors disabled:opacity-50 cursor-pointer"
               >
                 <Trash2 className="h-3.5 w-3.5 text-rose-600" />
