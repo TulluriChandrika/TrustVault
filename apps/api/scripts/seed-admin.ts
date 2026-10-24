@@ -4,22 +4,46 @@ import { getSupabaseAdmin } from "../src/supabase.js";
 
 async function seedAdmin() {
   const adminEmail = (process.env.ADMIN_EMAIL || "admin@trustvault.local").trim().toLowerCase();
-  const adminPassword = process.env.ADMIN_PASSWORD || "TrustVault@Admin2026!";
+  const adminPassword = process.env.ADMIN_PASSWORD;
+
+  if (!adminPassword || adminPassword.length < 8) {
+    throw new Error(
+      "[Admin Seed] ADMIN_PASSWORD environment variable is required (minimum 8 characters) to provision an administrator."
+    );
+  }
 
   console.log(`[Admin Seed] Starting controlled local admin provisioning for: ${adminEmail}`);
 
   const supabase = getSupabaseAdmin();
 
-  // 1. Check if user already exists in Supabase Auth
-  const { data: usersData, error: listError } = await supabase.auth.admin.listUsers();
-  if (listError) {
-    throw new Error(`Failed to query Supabase Auth users: ${listError.message}`);
-  }
+  // 1. Check if user already exists in Supabase Auth with pagination
+  let authUserId: string | null = null;
+  let existingAuthUser: any = null;
+  let page = 1;
+  const perPage = 50;
 
-  let authUserId: string;
-  const existingAuthUser = usersData.users.find(
-    (u) => u.email?.toLowerCase() === adminEmail
-  );
+  while (true) {
+    const { data: usersData, error: listError } = await supabase.auth.admin.listUsers({
+      page,
+      perPage,
+    });
+    if (listError) {
+      throw new Error(`Failed to query Supabase Auth users: ${listError.message}`);
+    }
+
+    const found = usersData.users.find(
+      (u) => u.email?.toLowerCase() === adminEmail
+    );
+    if (found) {
+      existingAuthUser = found;
+      break;
+    }
+
+    if (!usersData.users || usersData.users.length < perPage) {
+      break;
+    }
+    page += 1;
+  }
 
   if (existingAuthUser) {
     console.log(`[Admin Seed] Found existing Supabase Auth user (${existingAuthUser.id}). Updating password and confirming email...`);
@@ -77,8 +101,7 @@ async function seedAdmin() {
     role: provisioned.role,
     is_active: provisioned.is_active,
   });
-  console.log(`[Admin Seed] Login Email: ${adminEmail}`);
-  console.log(`[Admin Seed] Login Password: configured via ADMIN_PASSWORD (or default: TrustVault@Admin2026!)`);
+  console.log(`[Admin Seed] Provisioning complete for administrator account.`);
 }
 
 seedAdmin()

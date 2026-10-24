@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Share2,
   X,
@@ -41,29 +41,66 @@ export const ShareDocumentModal: React.FC<ShareDocumentModalProps> = ({
   const [targetEmail, setTargetEmail] = useState("");
   const [targetPermission, setTargetPermission] = useState<"read" | "edit">("read");
 
+  const activeDocIdRef = useRef<string | null>(null);
+
   useEffect(() => {
+    let isCurrent = true;
     if (isOpen && document?.id) {
-      loadPermissions();
+      const docId = document.id;
+      activeDocIdRef.current = docId;
+      setLoading(true);
+      setError(null);
+
+      fetchDocumentPermissions(token, docId)
+        .then((perms) => {
+          if (isCurrent && activeDocIdRef.current === docId) {
+            setPermissions(perms);
+          }
+        })
+        .catch((err: unknown) => {
+          if (isCurrent && activeDocIdRef.current === docId) {
+            setError(err instanceof Error ? err.message : "Failed to load document permissions.");
+          }
+        })
+        .finally(() => {
+          if (isCurrent && activeDocIdRef.current === docId) {
+            setLoading(false);
+          }
+        });
     } else {
+      activeDocIdRef.current = null;
       setPermissions([]);
       setError(null);
       setSuccessMessage(null);
       setTargetEmail("");
     }
-  }, [isOpen, document?.id]);
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [isOpen, document?.id, token]);
 
   if (!isOpen || !document) return null;
 
   const loadPermissions = async () => {
+    if (!document?.id) return;
+    const docId = document.id;
+    activeDocIdRef.current = docId;
     setLoading(true);
     setError(null);
     try {
-      const perms = await fetchDocumentPermissions(token, document.id);
-      setPermissions(perms);
+      const perms = await fetchDocumentPermissions(token, docId);
+      if (activeDocIdRef.current === docId) {
+        setPermissions(perms);
+      }
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to load document permissions.");
+      if (activeDocIdRef.current === docId) {
+        setError(err instanceof Error ? err.message : "Failed to load document permissions.");
+      }
     } finally {
-      setLoading(false);
+      if (activeDocIdRef.current === docId) {
+        setLoading(false);
+      }
     }
   };
 

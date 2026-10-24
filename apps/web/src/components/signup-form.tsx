@@ -88,8 +88,12 @@ export function SignupForm({
       }
 
       if (data.user && !data.session) {
+        if (data.user.identities && data.user.identities.length === 0) {
+          setError("An account with this email address already exists. Please log in instead.");
+          return;
+        }
         setInfoMessage(
-          "Account created! Please check your inbox and confirm your email address before signing in."
+          "Account created successfully! You can now log in to your account."
         );
       } else {
         onSuccess?.();
@@ -114,7 +118,7 @@ export function SignupForm({
       } else if (rawMessage.includes("password") && (rawMessage.includes("weak") || rawMessage.includes("least"))) {
         friendlyMessage = "Password is too weak. Please choose a password with at least 8 characters.";
       } else if (code === "over_email_send_rate_limit" || rawMessage.includes("60 seconds") || rawMessage.includes("email rate limit")) {
-        friendlyMessage = "Email delivery rate limit reached. For security purposes, please wait a minute before requesting another confirmation email.";
+        friendlyMessage = "Registration rate limit reached. For security purposes, please wait a moment before trying again.";
       } else if (code === "over_request_rate_limit" || rawMessage.includes("rate limit") || status === 429) {
         friendlyMessage = "Too many registration attempts. Please wait a moment before trying again.";
       } else if (rawMessage.includes("network") || rawMessage.includes("failed to fetch")) {
@@ -246,9 +250,8 @@ export function SignupForm({
           />
           <button
             type="button"
-            className="absolute right-3.5 text-[#8A93B6] hover:text-[#6153CC] transition-colors p-1"
+            className="absolute right-3.5 text-[#8A93B6] hover:text-[#6153CC] transition-colors p-1 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#6153CC]/30"
             onClick={() => setShowPassword((prev) => !prev)}
-            tabIndex={-1}
             aria-label={showPassword ? "Hide password" : "Show password"}
           >
             {showPassword ? <EyeOff className="h-[18px] w-[18px]" /> : <Eye className="h-[18px] w-[18px]" />}

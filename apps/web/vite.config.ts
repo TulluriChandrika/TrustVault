@@ -4,8 +4,10 @@ import path from "node:path";
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
-  const rootDir = path.resolve(import.meta.dirname, "../../");
-  const env = loadEnv(mode, rootDir, "");
+  const workspaceRoot = path.resolve(import.meta.dirname, "../..");
+  const rootEnv = loadEnv(mode, workspaceRoot, "");
+  const localEnv = loadEnv(mode, import.meta.dirname, "");
+  const env = { ...rootEnv, ...localEnv };
 
   const supabaseUrl = env.VITE_SUPABASE_URL || env.SUPABASE_URL || "";
   const supabaseAnonKey = env.VITE_SUPABASE_ANON_KEY || env.SUPABASE_ANON_KEY || "";
@@ -18,7 +20,7 @@ export default defineConfig(({ mode }) => {
         "@": path.resolve(import.meta.dirname, "./src"),
       },
     },
-    envDir: rootDir,
+    envDir: workspaceRoot,
     define: {
       ...(supabaseUrl ? { "import.meta.env.VITE_SUPABASE_URL": JSON.stringify(supabaseUrl) } : {}),
       ...(supabaseAnonKey ? { "import.meta.env.VITE_SUPABASE_ANON_KEY": JSON.stringify(supabaseAnonKey) } : {}),

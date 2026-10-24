@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import React, { useState, useMemo, useEffect, useRef, useLayoutEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import {
   FileText,
   Download,
@@ -13,6 +14,9 @@ import {
   Pencil,
   SlidersHorizontal,
   X,
+  RefreshCw,
+  MoreVertical,
+  Loader2,
 } from "lucide-react";
 import type { DocumentItem, UserProfile } from "@/lib/api";
 
@@ -29,6 +33,9 @@ interface DocumentsViewProps {
   onDelete: (doc: DocumentItem) => void;
   downloadingId: string | null;
   deletingId: string | null;
+  onRefresh?: () => void;
+  isRefreshing?: boolean;
+  refreshFeedback?: { type: "success" | "error"; message: string } | null;
 }
 
 export const DocumentsView: React.FC<DocumentsViewProps> = ({
@@ -44,19 +51,164 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   onDelete,
   downloadingId,
   deletingId,
+  onRefresh,
+  isRefreshing = false,
+  refreshFeedback = null,
 }) => {
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
   const [viewMode, setViewMode] = useState<"table" | "grid">("table");
 
+  // Floating Portal Overflow Menu State
+  const [menuAnchor, setMenuAnchor] = useState<{
+    doc: DocumentItem;
+    triggerEl: HTMLElement;
+  } | null>(null);
+  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
+  const portalMenuRef = useRef<HTMLDivElement>(null);
+
+  // Measure and align the floating portal menu relative to the trigger button
+  const updateMenuPosition = useCallback(() => {
+    if (!menuAnchor) {
+      setMenuPosition(null);
+      return;
+    }
+
+    const rect = menuAnchor.triggerEl.getBoundingClientRect();
+    const menuEl = portalMenuRef.current;
+    const menuWidth = menuEl ? menuEl.offsetWidth : 160;
+    const menuHeight = menuEl ? menuEl.offsetHeight : 120;
+
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+
+    // Align right edge of menu with right edge of trigger button
+    let left = rect.right - menuWidth;
+    if (left < 8) {
+      left = 8;
+    } else if (left + menuWidth > viewportWidth - 8) {
+      left = viewportWidth - menuWidth - 8;
+    }
+
+    // Default to placing below button; if it would overflow bottom, flip above
+    let top = rect.bottom + 4;
+    if (top + menuHeight > viewportHeight - 8) {
+      const topAbove = rect.top - menuHeight - 4;
+      if (topAbove >= 8) {
+        top = topAbove;
+      } else {
+        top = Math.max(8, viewportHeight - menuHeight - 8);
+      }
+    }
+
+    setMenuPosition({ top, left });
+  }, [menuAnchor]);
+
+  useLayoutEffect(() => {
+    updateMenuPosition();
+  }, [updateMenuPosition]);
+
+  // Close floating menu if the relevant document is removed from document list
+  useEffect(() => {
+    if (menuAnchor && !documents.some((d) => d.id === menuAnchor.doc.id)) {
+      setMenuAnchor(null);
+    }
+  }, [documents, menuAnchor]);
+
+  // Handle outside clicks, Escape key, and scroll/resize dismissal
+  useEffect(() => {
+    if (!menuAnchor) return;
+
+    const handlePointerDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (menuAnchor.triggerEl.contains(target)) {
+        return;
+      }
+      if (portalMenuRef.current && portalMenuRef.current.contains(target)) {
+        return;
+      }
+      setMenuAnchor(null);
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setMenuAnchor(null);
+        menuAnchor.triggerEl.focus();
+      }
+    };
+
+    const handleScrollOrResize = () => {
+      setMenuAnchor(null);
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("scroll", handleScrollOrResize, true);
+    window.addEventListener("resize", handleScrollOrResize);
+
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("scroll", handleScrollOrResize, true);
+      window.removeEventListener("resize", handleScrollOrResize);
+    };
+  }, [menuAnchor]);
+
+  // Focus first menu item when opened for keyboard accessibility
+  useEffect(() => {
+    if (menuAnchor && portalMenuRef.current) {
+      const firstButton = portalMenuRef.current.querySelector<HTMLButtonElement>("button:not([disabled])");
+      firstButton?.focus();
+    }
+  }, [menuAnchor, menuPosition]);
+
+  // Keyboard navigation within the floating menu (ArrowDown/ArrowUp)
+  const handleMenuKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!portalMenuRef.current) return;
+      const buttons = Array.from(
+        portalMenuRef.current.querySelectorAll<HTMLButtonElement>("button:not([disabled])")
+      );
+      const currentIndex = buttons.indexOf(document.activeElement as HTMLButtonElement);
+      if (currentIndex === -1) {
+        buttons[0]?.focus();
+      } else if (e.key === "ArrowDown") {
+        const nextIndex = (currentIndex + 1) % buttons.length;
+        buttons[nextIndex]?.focus();
+      } else {
+        const prevIndex = (currentIndex - 1 + buttons.length) % buttons.length;
+        buttons[prevIndex]?.focus();
+      }
+    }
+  };
+
   // 1. Filter by scope (All vs Owned vs Shared)
-  let filtered = documents.filter((doc) => {
-    const isOwner = doc.owner_id === profile?.id || doc.access_level === "owner";
-    if (filterScope === "owned") return isOwner;
-    if (filterScope === "shared") return !isOwner;
-    return true;
-  });
+  const scopeFiltered = useMemo(() => {
+    return documents.filter((doc) => {
+      const isOwner = doc.owner_id === profile?.id || doc.access_level === "owner";
+      if (filterScope === "owned") return isOwner;
+      if (filterScope === "shared") return !isOwner;
+      return true;
+    });
+  }, [documents, filterScope, profile?.id]);
+
+  // Extract unique categories from the scope-filtered documents
+  const categories = useMemo(() => {
+    return Array.from(new Set(scopeFiltered.map((d) => d.category).filter(Boolean)));
+  }, [scopeFiltered]);
+
+  // Reset category if selected category is not present in the new scope
+  useEffect(() => {
+    if (
+      selectedCategory !== "all" &&
+      !categories.some((c) => c.toLowerCase() === selectedCategory.toLowerCase())
+    ) {
+      setSelectedCategory("all");
+    }
+  }, [categories, selectedCategory]);
 
   // 2. Filter by Category
+  let filtered = scopeFiltered;
   if (selectedCategory !== "all") {
     filtered = filtered.filter(
       (doc) => (doc.category || "").toLowerCase() === selectedCategory.toLowerCase()
@@ -75,11 +227,6 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         (doc.owner_name && doc.owner_name.toLowerCase().includes(q))
     );
   }
-
-  // Extract unique categories
-  const categories = Array.from(
-    new Set(documents.map((d) => d.category).filter(Boolean))
-  );
 
   const formatFileSize = (bytes: number | string): string => {
     const num = typeof bytes === "number" ? bytes : parseInt(bytes, 10) || 0;
@@ -103,7 +250,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                 : "bg-[#FBFBFE] text-[#6B7B9F] hover:bg-[#F6F8FD] hover:text-[#101936] border border-[#E8E6F8]"
             }`}
           >
-            All Categories ({documents.length})
+            All Categories ({scopeFiltered.length})
           </button>
 
           {categories.map((cat) => (
@@ -121,8 +268,22 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           ))}
         </div>
 
-        {/* View Switcher & Action */}
+        {/* View Switcher, Refresh & Upload Action */}
         <div className="flex items-center gap-2">
+          {onRefresh && (
+            <button
+              type="button"
+              id="refresh-documents-btn"
+              onClick={onRefresh}
+              disabled={isRefreshing}
+              aria-label="Refresh documents list"
+              className="h-8 px-2.5 rounded-lg border border-[#E2E0F2] bg-[#FBFBFE] hover:bg-[#F6F8FD] hover:text-[#6153CC] text-[#101936] text-xs font-semibold flex items-center gap-1.5 transition-all disabled:opacity-60 disabled:cursor-not-allowed shadow-sm"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 text-[#6153CC] ${isRefreshing ? "animate-spin" : ""}`} />
+              <span>{isRefreshing ? "Refreshing..." : "Refresh"}</span>
+            </button>
+          )}
+
           <div className="flex items-center rounded-lg border border-[#E2E0F2] bg-[#FBFBFE] p-0.5">
             <button
               onClick={() => setViewMode("table")}
@@ -158,6 +319,25 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
             <span>Upload</span>
           </button>
         </div>
+      </div>
+
+      {/* Subtle Document Refresh Notice */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl bg-[#F6F8FD] border border-[#E8E6F8] text-[12px] text-[#6B7B9F]">
+        <div className="flex items-center gap-2">
+          <span className="font-semibold text-[#101936]">Not seeing the latest changes?</span>
+          <span>Refresh your documents to see the latest files and sharing permissions.</span>
+        </div>
+        {refreshFeedback && (
+          <div
+            className={`text-xs font-medium px-2 py-0.5 rounded-md ${
+              refreshFeedback.type === "success"
+                ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                : "bg-rose-50 text-rose-700 border border-rose-200"
+            }`}
+          >
+            {refreshFeedback.message}
+          </div>
+        )}
       </div>
 
       {/* Active Search Banner */}
@@ -238,7 +418,6 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                   const isOwner = doc.owner_id === profile?.id || doc.access_level === "owner";
                   const canEdit = isOwner || doc.access_level === "edit";
                   const isDownloading = downloadingId === doc.id;
-                  const isDeleting = deletingId === doc.id;
 
                   return (
                     <tr key={doc.id} className="hover:bg-[#FBFBFE]/70 transition-colors">
@@ -300,61 +479,74 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                       </td>
 
                       <td className="py-3.5 px-5 text-right">
-                        <div className="flex items-center justify-end gap-1.5 flex-wrap">
-                          {/* Download - available to all authorized users (read, edit, owner) */}
+                        <div className="flex items-center justify-end gap-1.5 relative" data-row-menu>
+                          {/* Primary Action 1: Download (all users) */}
                           <button
                             onClick={() => onDownload(doc)}
                             disabled={isDownloading}
-                            className="p-1.5 rounded-lg border border-[#E2E0F2] hover:bg-[#F6F8FD] text-[#554DE7] hover:border-[#6153CC]/40 transition-all inline-flex items-center gap-1 text-[11px] font-semibold"
+                            className="p-1.5 px-2.5 rounded-lg border border-[#E2E0F2] hover:bg-[#F6F8FD] text-[#554DE7] hover:border-[#6153CC]/40 transition-all inline-flex items-center gap-1.5 text-[11px] font-semibold disabled:opacity-80"
                             title="Download document securely"
+                            aria-label={isDownloading ? "Downloading document" : "Download document"}
                           >
-                            <Download className={`h-3.5 w-3.5 ${isDownloading ? "animate-bounce" : ""}`} />
-                            <span className="hidden sm:inline">Download</span>
+                            {isDownloading ? (
+                              <>
+                                <Loader2 className="h-3.5 w-3.5 animate-spin text-[#554DE7]" />
+                                <span>Downloading…</span>
+                              </>
+                            ) : (
+                              <>
+                                <Download className="h-3.5 w-3.5" />
+                                <span className="hidden sm:inline">Download</span>
+                              </>
+                            )}
                           </button>
 
-                          {/* Edit Actions: Rename and Details - for owner and edit access */}
-                          {canEdit && (
-                            <>
-                              <button
-                                onClick={() => onOpenEdit(doc, "rename")}
-                                className="p-1.5 rounded-lg border border-[#E2E0F2] hover:bg-[#F6F8FD] text-[#6153CC] hover:border-[#6153CC]/40 transition-all inline-flex items-center gap-1 text-[11px] font-semibold"
-                                title="Rename document"
-                              >
-                                <Pencil className="h-3.5 w-3.5" />
-                                <span className="hidden md:inline">Rename</span>
-                              </button>
+                          {/* Primary Action 2 (if available): Share for Owner, Details for Editor */}
+                          {isOwner ? (
+                            <button
+                              onClick={() => onOpenShare(doc)}
+                              className="p-1.5 px-2.5 rounded-lg border border-[#E2E0F2] hover:bg-[#F6F8FD] text-[#6153CC] hover:border-[#6153CC]/40 transition-all inline-flex items-center gap-1.5 text-[11px] font-semibold"
+                              title="Manage sharing & permissions"
+                              aria-label="Share document"
+                            >
+                              <Share2 className="h-3.5 w-3.5" />
+                              <span className="hidden sm:inline">Share</span>
+                            </button>
+                          ) : canEdit ? (
+                            <button
+                              onClick={() => onOpenEdit(doc, "details")}
+                              className="p-1.5 px-2.5 rounded-lg border border-[#E2E0F2] hover:bg-[#F6F8FD] text-[#6153CC] hover:border-[#6153CC]/40 transition-all inline-flex items-center gap-1.5 text-[11px] font-semibold"
+                              title="Edit document details and description"
+                              aria-label="Edit document details"
+                            >
+                              <SlidersHorizontal className="h-3.5 w-3.5" />
+                              <span className="hidden sm:inline">Details</span>
+                            </button>
+                          ) : null}
 
-                              <button
-                                onClick={() => onOpenEdit(doc, "details")}
-                                className="p-1.5 rounded-lg border border-[#E2E0F2] hover:bg-[#F6F8FD] text-[#6153CC] hover:border-[#6153CC]/40 transition-all inline-flex items-center gap-1 text-[11px] font-semibold"
-                                title="Edit document details and description"
-                              >
-                                <SlidersHorizontal className="h-3.5 w-3.5" />
-                                <span className="hidden md:inline">Details</span>
-                              </button>
-                            </>
-                          )}
-
-                          {/* Owner Only Actions: Share and Delete */}
-                          {isOwner && (
-                            <>
-                              <button
-                                onClick={() => onOpenShare(doc)}
-                                className="p-1.5 rounded-lg border border-[#E2E0F2] hover:bg-[#F6F8FD] text-[#6153CC] hover:border-[#6153CC]/40 transition-all text-[11px] font-semibold"
-                                title="Manage sharing & permissions"
-                              >
-                                <Share2 className="h-3.5 w-3.5" />
-                              </button>
-
-                              <button
-                                onClick={() => onDelete(doc)}
-                                disabled={isDeleting}
-                                className="p-1.5 rounded-lg border border-[#E2E0F2] hover:bg-rose-50 text-rose-600 hover:border-rose-200 transition-all text-[11px] font-semibold"
-                                title="Delete document"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
-                            </>
+                          {/* 3-dot Overflow Menu (when > 2 actions exist: Owner has 5, Editor has 3) */}
+                          {(isOwner || canEdit) && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (menuAnchor?.doc.id === doc.id) {
+                                  setMenuAnchor(null);
+                                } else {
+                                  setMenuAnchor({ doc, triggerEl: e.currentTarget });
+                                }
+                              }}
+                              aria-label={`More actions for ${doc.title}`}
+                              aria-haspopup="true"
+                              aria-expanded={menuAnchor?.doc.id === doc.id}
+                              className={`p-1.5 rounded-lg border transition-all inline-flex items-center ${
+                                menuAnchor?.doc.id === doc.id
+                                  ? "border-[#6153CC] bg-[#F1F3FD] text-[#6153CC]"
+                                  : "border-[#E2E0F2] hover:bg-[#F6F8FD] text-[#8A93B6] hover:text-[#101936]"
+                              }`}
+                            >
+                              <MoreVertical className="h-3.5 w-3.5" />
+                            </button>
                           )}
                         </div>
                       </td>
@@ -372,12 +564,11 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
             const isOwner = doc.owner_id === profile?.id || doc.access_level === "owner";
             const canEdit = isOwner || doc.access_level === "edit";
             const isDownloading = downloadingId === doc.id;
-            const isDeleting = deletingId === doc.id;
 
             return (
               <div
                 key={doc.id}
-                className="p-5 rounded-2xl bg-white border border-[#E8E6F8] shadow-sm flex flex-col justify-between hover:shadow-md transition-shadow"
+                className="p-5 rounded-2xl bg-white border border-[#E8E6F8] shadow-sm flex flex-col justify-between hover:shadow-md transition-shadow relative"
               >
                 <div>
                   <div className="flex items-center justify-between gap-2 mb-3">
@@ -426,53 +617,74 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                     {new Date(doc.created_at).toLocaleDateString()}
                   </span>
 
-                  <div className="flex items-center gap-1.5 flex-wrap">
+                  <div className="flex items-center gap-1.5 relative" data-row-menu>
+                    {/* Primary Action 1: Download */}
                     <button
                       onClick={() => onDownload(doc)}
                       disabled={isDownloading}
-                      className="p-1.5 rounded-lg border border-[#E2E0F2] hover:bg-[#F6F8FD] text-[#554DE7] transition-all"
-                      title="Download document"
+                      className="p-1.5 px-2.5 rounded-lg border border-[#E2E0F2] hover:bg-[#F6F8FD] text-[#554DE7] hover:border-[#6153CC]/40 transition-all inline-flex items-center gap-1.5 text-[11px] font-semibold disabled:opacity-80"
+                      title="Download document securely"
+                      aria-label={isDownloading ? "Downloading document" : "Download document"}
                     >
-                      <Download className={`h-3.5 w-3.5 ${isDownloading ? "animate-bounce" : ""}`} />
+                      {isDownloading ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 animate-spin text-[#554DE7]" />
+                          <span>Downloading…</span>
+                        </>
+                      ) : (
+                        <>
+                          <Download className="h-3.5 w-3.5" />
+                          <span>Download</span>
+                        </>
+                      )}
                     </button>
 
-                    {canEdit && (
-                      <>
-                        <button
-                          onClick={() => onOpenEdit(doc, "rename")}
-                          className="p-1.5 rounded-lg border border-[#E2E0F2] hover:bg-[#F6F8FD] text-[#6153CC] transition-all"
-                          title="Rename document"
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          onClick={() => onOpenEdit(doc, "details")}
-                          className="p-1.5 rounded-lg border border-[#E2E0F2] hover:bg-[#F6F8FD] text-[#6153CC] transition-all"
-                          title="Edit document details"
-                        >
-                          <SlidersHorizontal className="h-3.5 w-3.5" />
-                        </button>
-                      </>
-                    )}
+                    {/* Primary Action 2 (if available): Share for Owner, Details for Editor */}
+                    {isOwner ? (
+                      <button
+                        onClick={() => onOpenShare(doc)}
+                        className="p-1.5 px-2 rounded-lg border border-[#E2E0F2] hover:bg-[#F6F8FD] text-[#6153CC] hover:border-[#6153CC]/40 transition-all inline-flex items-center gap-1 text-[11px] font-semibold"
+                        title="Manage sharing & permissions"
+                        aria-label="Share document"
+                      >
+                        <Share2 className="h-3.5 w-3.5" />
+                        <span className="hidden sm:inline">Share</span>
+                      </button>
+                    ) : canEdit ? (
+                      <button
+                        onClick={() => onOpenEdit(doc, "details")}
+                        className="p-1.5 px-2 rounded-lg border border-[#E2E0F2] hover:bg-[#F6F8FD] text-[#6153CC] hover:border-[#6153CC]/40 transition-all inline-flex items-center gap-1 text-[11px] font-semibold"
+                        title="Edit document details"
+                        aria-label="Edit document details"
+                      >
+                        <SlidersHorizontal className="h-3.5 w-3.5" />
+                        <span className="hidden sm:inline">Details</span>
+                      </button>
+                    ) : null}
 
-                    {isOwner && (
-                      <>
-                        <button
-                          onClick={() => onOpenShare(doc)}
-                          className="p-1.5 rounded-lg border border-[#E2E0F2] hover:bg-[#F6F8FD] text-[#6153CC] transition-all"
-                          title="Share"
-                        >
-                          <Share2 className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          onClick={() => onDelete(doc)}
-                          disabled={isDeleting}
-                          className="p-1.5 rounded-lg border border-[#E2E0F2] hover:bg-rose-50 text-rose-600 transition-all"
-                          title="Delete"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </>
+                    {/* 3-dot Overflow Menu */}
+                    {(isOwner || canEdit) && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (menuAnchor?.doc.id === doc.id) {
+                            setMenuAnchor(null);
+                          } else {
+                            setMenuAnchor({ doc, triggerEl: e.currentTarget });
+                          }
+                        }}
+                        aria-label={`More actions for ${doc.title}`}
+                        aria-haspopup="true"
+                        aria-expanded={menuAnchor?.doc.id === doc.id}
+                        className={`p-1.5 rounded-lg border transition-all inline-flex items-center ${
+                          menuAnchor?.doc.id === doc.id
+                            ? "border-[#6153CC] bg-[#F1F3FD] text-[#6153CC]"
+                            : "border-[#E2E0F2] hover:bg-[#F6F8FD] text-[#8A93B6] hover:text-[#101936]"
+                        }`}
+                      >
+                        <MoreVertical className="h-3.5 w-3.5" />
+                      </button>
                     )}
                   </div>
                 </div>
@@ -481,6 +693,76 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           })}
         </div>
       )}
+
+      {/* Floating Portal Overflow Menu rendered directly into document.body */}
+      {menuAnchor &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            ref={portalMenuRef}
+            role="menu"
+            aria-orientation="vertical"
+            aria-label={`Actions for ${menuAnchor.doc.title}`}
+            onKeyDown={handleMenuKeyDown}
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: "fixed",
+              top: menuPosition ? `${menuPosition.top}px` : "-9999px",
+              left: menuPosition ? `${menuPosition.left}px` : "-9999px",
+              visibility: menuPosition ? "visible" : "hidden",
+              zIndex: 9999,
+            }}
+            className="w-40 rounded-xl bg-white border border-[#E8E6F8] shadow-2xl py-1 text-left animate-in fade-in zoom-in-95 duration-100"
+          >
+            {(menuAnchor.doc.owner_id === profile?.id || menuAnchor.doc.access_level === "owner") && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  const doc = menuAnchor.doc;
+                  setMenuAnchor(null);
+                  onOpenEdit(doc, "details");
+                }}
+                className="w-full px-3 py-2 text-[11.5px] font-medium text-[#101936] hover:bg-[#F6F8FD] focus:bg-[#F6F8FD] focus:outline-none flex items-center gap-2 transition-colors cursor-pointer"
+              >
+                <SlidersHorizontal className="h-3.5 w-3.5 text-[#6153CC]" />
+                <span>Edit Details</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                const doc = menuAnchor.doc;
+                setMenuAnchor(null);
+                onOpenEdit(doc, "rename");
+              }}
+              className="w-full px-3 py-2 text-[11.5px] font-medium text-[#101936] hover:bg-[#F6F8FD] focus:bg-[#F6F8FD] focus:outline-none flex items-center gap-2 transition-colors cursor-pointer"
+            >
+              <Pencil className="h-3.5 w-3.5 text-[#6153CC]" />
+              <span>Rename</span>
+            </button>
+
+            {(menuAnchor.doc.owner_id === profile?.id || menuAnchor.doc.access_level === "owner") && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  const doc = menuAnchor.doc;
+                  setMenuAnchor(null);
+                  onDelete(doc);
+                }}
+                disabled={deletingId === menuAnchor.doc.id}
+                className="w-full px-3 py-2 text-[11.5px] font-medium text-rose-600 hover:bg-rose-50 focus:bg-rose-50 focus:outline-none flex items-center gap-2 border-t border-[#E8E6F8] mt-1 transition-colors disabled:opacity-50 cursor-pointer"
+              >
+                <Trash2 className="h-3.5 w-3.5 text-rose-600" />
+                <span>Delete</span>
+              </button>
+            )}
+          </div>,
+          document.body
+        )}
     </div>
   );
 };

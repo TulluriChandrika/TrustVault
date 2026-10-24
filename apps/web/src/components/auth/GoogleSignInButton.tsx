@@ -12,7 +12,6 @@ interface GoogleSignInButtonProps {
 }
 
 export const GoogleSignInButton: React.FC<GoogleSignInButtonProps> = ({
-  onSuccess,
   onError,
   disabled = false,
   className,
@@ -40,8 +39,7 @@ export const GoogleSignInButton: React.FC<GoogleSignInButtonProps> = ({
       if (error) {
         throw error;
       }
-
-      onSuccess?.();
+      // Note: OAuth completes via browser redirect and Supabase auth state change; do not fire onSuccess prematurely.
     } catch (err: unknown) {
       const message =
         err instanceof Error

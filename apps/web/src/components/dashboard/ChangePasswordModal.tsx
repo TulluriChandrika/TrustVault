@@ -24,8 +24,25 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [isOAuthUser, setIsOAuthUser] = useState(false);
 
   const isSubmittingRef = useRef(false);
+
+  React.useEffect(() => {
+    if (isOpen) {
+      supabase.auth.getUser().then(({ data: { user } }) => {
+        const hasEmailIdentity = user?.identities?.some((id) => id.provider === "email");
+        const isEmailProvider = user?.app_metadata?.provider === "email" || hasEmailIdentity;
+        if (user && !isEmailProvider && user.app_metadata?.provider) {
+          setIsOAuthUser(true);
+        } else {
+          setIsOAuthUser(false);
+        }
+      }).catch(() => {
+        setIsOAuthUser(false);
+      });
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -35,6 +52,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
     setConfirmPassword("");
     setError(null);
     setSuccess(false);
+    setIsOAuthUser(false);
     setShowCurrentPassword(false);
     setShowNewPassword(false);
     setShowConfirmPassword(false);
@@ -133,7 +151,26 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
 
         {/* Form Body */}
         <div className="p-6">
-          {success ? (
+          {isOAuthUser ? (
+            <div className="py-4 space-y-4 text-center">
+              <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs text-left leading-relaxed flex items-start gap-2.5">
+                <AlertCircle className="h-4 w-4 shrink-0 text-amber-600 mt-0.5" />
+                <div>
+                  <p className="font-semibold text-amber-900 mb-1">Single Sign-On (OAuth) Account</p>
+                  <p>
+                    Your TrustVault account is authenticated via an external identity provider (such as Google). Password management is handled directly through your external provider.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleClose}
+                className="w-full h-10 rounded-xl bg-[#6153CC] hover:bg-[#554DE7] text-white text-xs font-semibold transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          ) : success ? (
             <div className="py-6 text-center space-y-3">
               <div className="h-12 w-12 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto">
                 <CheckCircle2 className="h-6 w-6" />

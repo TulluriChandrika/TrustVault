@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { AppSidebar, type DashboardView } from "./AppSidebar";
 import { AppHeader } from "./AppHeader";
 import { OverviewView } from "./OverviewView";
@@ -16,7 +16,7 @@ import {
   type DocumentItem,
   type UserProfile,
 } from "@/lib/api";
-import { AlertCircle, RefreshCw, Trash2, Loader2 } from "lucide-react";
+import { AlertCircle, RefreshCw, Trash2, Loader2, X } from "lucide-react";
 
 interface DashboardLayoutProps {
   token: string;
@@ -39,6 +39,11 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<{
+    message: string;
+    canRefresh: boolean;
+    isSessionExpired: boolean;
+  } | null>(null);
 
   // Action states
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
@@ -70,6 +75,13 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
     setEditMode(mode);
   };
 
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [refreshFeedback, setRefreshFeedback] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
+  const refreshRequestIdRef = useRef(0);
+
   const loadDocuments = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -85,6 +97,79 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
     }
   }, [token]);
 
+  const handleActionError = useCallback((err: unknown) => {
+    const status = (err as any)?.status;
+    const rawMsg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+
+    if (status === 401 || rawMsg.includes("jwt") || rawMsg.includes("unauthorized") || rawMsg.includes("session")) {
+      setActionError({
+        message: "Your session has expired. Please sign in again to continue.",
+        canRefresh: false,
+        isSessionExpired: true,
+      });
+      return;
+    }
+
+    if (
+      status === 404 ||
+      status === 403 ||
+      rawMsg.includes("not found") ||
+      rawMsg.includes("permission") ||
+      rawMsg.includes("forbidden") ||
+      rawMsg.includes("authorization")
+    ) {
+      setActionError({
+        message:
+          "Unable to access this document. Your permission may have changed, or the document may no longer be available. Please refresh the page and try again.",
+        canRefresh: true,
+        isSessionExpired: false,
+      });
+      return;
+    }
+
+    setActionError({
+      message: err instanceof Error ? err.message : "An unexpected error occurred. Please try again.",
+      canRefresh: true,
+      isSessionExpired: false,
+    });
+  }, []);
+
+  const handleRefreshDocuments = useCallback(async () => {
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+    setRefreshFeedback(null);
+    setActionError(null);
+    const requestId = ++refreshRequestIdRef.current;
+
+    try {
+      const docs = await fetchDocuments(token);
+      if (requestId === refreshRequestIdRef.current) {
+        setDocuments(docs);
+        setRefreshFeedback({
+          type: "success",
+          message: "Documents and permissions refreshed.",
+        });
+        setTimeout(() => {
+          setRefreshFeedback((prev) => (prev?.type === "success" ? null : prev));
+        }, 4000);
+      }
+    } catch (err: unknown) {
+      if (requestId === refreshRequestIdRef.current) {
+        setRefreshFeedback({
+          type: "error",
+          message:
+            err instanceof Error
+              ? err.message
+              : "Failed to refresh documents. Please try again.",
+        });
+      }
+    } finally {
+      if (requestId === refreshRequestIdRef.current) {
+        setIsRefreshing(false);
+      }
+    }
+  }, [isRefreshing, token]);
+
   useEffect(() => {
     loadDocuments();
   }, [loadDocuments]);
@@ -92,6 +177,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   // Handle file download
   const handleDownload = async (doc: DocumentItem) => {
     setDownloadingId(doc.id);
+    setActionError(null);
     try {
       const { blob, filename } = await downloadDocument(token, doc.id);
       const url = window.URL.createObjectURL(blob);
@@ -107,7 +193,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
         }
       }, 1000);
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Download failed.");
+      handleActionError(err);
     } finally {
       setDownloadingId(null);
     }
@@ -117,12 +203,13 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   const confirmDelete = async () => {
     if (!deletingDoc) return;
     setDeleteLoading(true);
+    setActionError(null);
     try {
       await deleteDocument(token, deletingDoc.id);
       setDeletingDoc(null);
       await loadDocuments();
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Deletion failed.");
+      handleActionError(err);
     } finally {
       setDeleteLoading(false);
     }
@@ -174,6 +261,52 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
 
         {/* Content Body */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto">
+          {actionError && (
+            <div
+              role="alert"
+              className="mb-6 p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-medium flex items-center justify-between gap-3 shadow-sm animate-fade-in"
+            >
+              <div className="flex items-start gap-2.5">
+                <AlertCircle className="h-4 w-4 shrink-0 text-amber-600 mt-0.5" />
+                <div>
+                  <span className="font-bold text-[#101936] block mb-0.5">
+                    {actionError.isSessionExpired ? "Session Expired" : "Unable to access this document."}
+                  </span>
+                  <span className="text-amber-800 leading-relaxed">{actionError.message}</span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {actionError.canRefresh && (
+                  <button
+                    onClick={() => {
+                      setActionError(null);
+                      handleRefreshDocuments();
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-white border border-amber-300 hover:bg-amber-100/50 text-amber-900 text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-xs"
+                  >
+                    <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
+                    <span>Refresh Documents</span>
+                  </button>
+                )}
+                {actionError.isSessionExpired && (
+                  <button
+                    onClick={onSignOut}
+                    className="px-3 py-1.5 rounded-lg bg-[#6153CC] hover:bg-[#554DE7] text-white text-xs font-semibold transition-colors shadow-xs"
+                  >
+                    Sign In
+                  </button>
+                )}
+                <button
+                  onClick={() => setActionError(null)}
+                  className="p-1 rounded-md text-amber-600 hover:bg-amber-100 transition-colors"
+                  aria-label="Dismiss alert"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          )}
+
           {error && (
             <div className="mb-6 p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium flex items-center justify-between gap-3 shadow-sm">
               <div className="flex items-center gap-2.5">
@@ -225,6 +358,9 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                   onDelete={setDeletingDoc}
                   downloadingId={downloadingId}
                   deletingId={deletingDoc?.id || null}
+                  onRefresh={handleRefreshDocuments}
+                  isRefreshing={isRefreshing}
+                  refreshFeedback={refreshFeedback}
                 />
               )}
 
@@ -242,6 +378,9 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                   onDelete={setDeletingDoc}
                   downloadingId={downloadingId}
                   deletingId={deletingDoc?.id || null}
+                  onRefresh={handleRefreshDocuments}
+                  isRefreshing={isRefreshing}
+                  refreshFeedback={refreshFeedback}
                 />
               )}
 
@@ -259,6 +398,9 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                   onDelete={setDeletingDoc}
                   downloadingId={downloadingId}
                   deletingId={deletingDoc?.id || null}
+                  onRefresh={handleRefreshDocuments}
+                  isRefreshing={isRefreshing}
+                  refreshFeedback={refreshFeedback}
                 />
               )}
 

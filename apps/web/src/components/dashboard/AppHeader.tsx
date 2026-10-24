@@ -140,7 +140,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
         <div className="relative w-40 sm:w-64">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#8A93B6] pointer-events-none" />
           <input
+            id="global-document-search"
             type="text"
+            aria-label="Search documents or owner"
             placeholder="Search documents or owner..."
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}

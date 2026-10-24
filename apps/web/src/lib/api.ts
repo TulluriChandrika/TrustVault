@@ -368,7 +368,17 @@ export async function fetchAdminAuditLogs(
 export async function checkApiHealth(): Promise<HealthResponse> {
   try {
     const res = await fetch(`${API_BASE_URL}/health`);
-    return await res.json();
+    if (!res.ok) {
+      return {
+        status: "unhealthy",
+        error: `Backend returned HTTP status ${res.status}`,
+      };
+    }
+    const data = await res.json();
+    return {
+      status: data.status || "ok",
+      timestamp: data.timestamp,
+    };
   } catch (err: unknown) {
     return {
       status: "offline",

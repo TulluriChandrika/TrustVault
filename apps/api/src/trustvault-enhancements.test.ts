@@ -516,5 +516,321 @@ describe("TrustVault Feature Enhancements & Security Verification", () => {
       expect(res.status).toBe(400);
       expect(res.body.error).toMatch(/cannot be modified/i);
     });
+
+    it("preserves stored full_name in public.users on token validation without overwriting from metadata", async () => {
+      mockGetUser.mockResolvedValueOnce({
+        data: {
+          user: {
+            id: ALICE_ID,
+            email: "alice@example.com",
+            user_metadata: { full_name: "Old Metadata Name" },
+          },
+        },
+        error: null,
+      });
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [
+          {
+            id: ALICE_ID,
+            email: "alice@example.com",
+            full_name: "Alice Cooper",
+            role: "user",
+            is_active: true,
+          },
+        ],
+      });
+
+      const res = await request(app)
+        .get("/api/me")
+        .set("Authorization", "Bearer alice-token");
+
+      expect(res.status).toBe(200);
+      // Check SQL in upsert query preserves public.users.full_name
+      const upsertSql = mockQuery.mock.calls[0][0];
+      expect(upsertSql).toContain("COALESCE(public.users.full_name, EXCLUDED.full_name)");
+    });
+  });
+
+  // =========================================================================
+  // 5. DESCRIPTION NORMALIZATION & METADATA SANITIZATION
+  // =========================================================================
+  describe("Document Description Normalization", () => {
+    it("normalizes blank or whitespace-only descriptions to NULL on PATCH", async () => {
+      mockGetUser.mockResolvedValueOnce({
+        data: { user: { id: ALICE_ID, email: "alice@example.com" } },
+        error: null,
+      });
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: ALICE_ID, email: "alice@example.com", role: "user", is_active: true }],
+      });
+      // getDocumentWithAccess
+      mockQuery.mockResolvedValueOnce({
+        rows: [
+          {
+            id: DOC_ID,
+            owner_id: ALICE_ID,
+            title: "Doc.pdf",
+            category: "General",
+            description: "Old description",
+            access_level: "owner",
+          },
+        ],
+      });
+
+      mockClientQuery.mockResolvedValueOnce({}); // BEGIN
+      mockClientQuery.mockResolvedValueOnce({
+        rows: [
+          {
+            id: DOC_ID,
+            owner_id: ALICE_ID,
+            title: "Doc.pdf",
+            category: "General",
+            description: null,
+            access_level: "owner",
+          },
+        ],
+      });
+      mockClientQuery.mockResolvedValueOnce({}); // audit log
+      mockClientQuery.mockResolvedValueOnce({}); // COMMIT
+
+      const res = await request(app)
+        .patch(`/api/documents/${DOC_ID}`)
+        .set("Authorization", "Bearer alice-token")
+        .send({ description: "     " });
+
+      expect(res.status).toBe(200);
+      expect(res.body.document.description).toBeNull();
+
+      // Check query param passed to update is null
+      const updateCall = mockClientQuery.mock.calls[1];
+      expect(updateCall[1][3]).toBeNull(); // $4 should be null
+    });
+  });
+
+  // =========================================================================
+  // 6. END-TO-END SHARING & REVOCATION WORKFLOW
+  // =========================================================================
+  describe("End-to-End Permission Revocation & Direct API Access Enforcement", () => {
+    it("denies access immediately after owner revokes permission (non-disclosure 404)", async () => {
+      // Step 1: Owner revokes Bob's access
+      mockGetUser.mockResolvedValueOnce({
+        data: { user: { id: ALICE_ID, email: "alice@example.com" } },
+        error: null,
+      });
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: ALICE_ID, email: "alice@example.com", role: "user", is_active: true }],
+      });
+      // Ownership check via getDocumentWithAccess
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: DOC_ID, owner_id: ALICE_ID, access_level: "owner" }],
+      });
+      // activeGrant query
+      mockQuery.mockResolvedValueOnce({
+        rows: [
+          {
+            id: 99,
+            permission: "read",
+            target_email: "bob@example.com",
+          },
+        ],
+      });
+      // Transaction on client
+      mockClientQuery.mockResolvedValueOnce({}); // BEGIN
+      mockClientQuery.mockResolvedValueOnce({
+        rows: [{ id: 99 }],
+      }); // UPDATE RETURNING id
+      mockClientQuery.mockResolvedValueOnce({}); // recordAuditLog
+      mockClientQuery.mockResolvedValueOnce({}); // COMMIT
+
+      const revokeRes = await request(app)
+        .delete(`/api/documents/${DOC_ID}/permissions/${BOB_ID}`)
+        .set("Authorization", "Bearer alice-token");
+
+      expect(revokeRes.status).toBe(200);
+      expect(revokeRes.body.message).toMatch(/revoked successfully/i);
+
+      // Step 2: Bob immediately attempts to download the document after revocation
+      mockGetUser.mockResolvedValueOnce({
+        data: { user: { id: BOB_ID, email: "bob@example.com" } },
+        error: null,
+      });
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: BOB_ID, email: "bob@example.com", role: "user", is_active: true }],
+      });
+      // getDocumentWithAccess: returns no access (p.revoked_at IS NOT NULL)
+      mockQuery.mockResolvedValueOnce({
+        rows: [],
+      });
+      // Audit log insert for denied attempt
+      mockQuery.mockResolvedValueOnce({});
+
+      const downloadRes = await request(app)
+        .get(`/api/documents/${DOC_ID}/download`)
+        .set("Authorization", "Bearer bob-token");
+
+      expect(downloadRes.status).toBe(404);
+      expect(downloadRes.body.error).toBe("Document not found");
+
+      // Step 3: Bob attempts metadata read -> 404
+      mockGetUser.mockResolvedValueOnce({
+        data: { user: { id: BOB_ID, email: "bob@example.com" } },
+        error: null,
+      });
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: BOB_ID, email: "bob@example.com", role: "user", is_active: true }],
+      });
+      // getDocumentWithAccess
+      mockQuery.mockResolvedValueOnce({
+        rows: [],
+      });
+      // Audit log insert for denied attempt
+      mockQuery.mockResolvedValueOnce({});
+
+      const getDocRes = await request(app)
+        .get(`/api/documents/${DOC_ID}`)
+        .set("Authorization", "Bearer bob-token");
+
+      expect(getDocRes.status).toBe(404);
+      expect(getDocRes.body.error).toBe("Document not found");
+    });
+  });
+
+  // =========================================================================
+  // 9. CUSTOM CATEGORY AND NORMALIZATION TESTS
+  // =========================================================================
+  describe("Custom Category & Normalization", () => {
+    it("allows owner or editor to update document with a custom category and trims whitespace", async () => {
+      mockGetUser.mockResolvedValueOnce({
+        data: { user: { id: ALICE_ID, email: "alice@example.com" } },
+        error: null,
+      });
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: ALICE_ID, email: "alice@example.com", role: "user", is_active: true }],
+      });
+      // getDocumentWithAccess returns owner
+      mockQuery.mockResolvedValueOnce({
+        rows: [
+          {
+            id: DOC_ID,
+            owner_id: ALICE_ID,
+            title: "Tax_2025.pdf",
+            category: "General",
+            description: null,
+            access_level: "owner",
+          },
+        ],
+      });
+      // Transaction queries via client
+      mockClientQuery.mockResolvedValueOnce({}); // BEGIN
+      mockClientQuery.mockResolvedValueOnce({
+        rows: [
+          {
+            id: DOC_ID,
+            owner_id: ALICE_ID,
+            title: "Tax_2025.pdf",
+            category: "Audited Taxes & IRS Filings",
+            description: null,
+            access_level: "owner",
+          },
+        ],
+      }); // UPDATE RETURNING
+      mockClientQuery.mockResolvedValueOnce({}); // Audit log
+      mockClientQuery.mockResolvedValueOnce({}); // COMMIT
+
+      const res = await request(app)
+        .patch(`/api/documents/${DOC_ID}`)
+        .set("Authorization", "Bearer alice-token")
+        .send({
+          category: "  Audited Taxes & IRS Filings  ",
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.document.category).toBe("Audited Taxes & IRS Filings");
+
+      // Verify that the UPDATE query received the trimmed string
+      const updateCall = mockClientQuery.mock.calls[1];
+      expect(updateCall[1]).toContain("Audited Taxes & IRS Filings");
+    });
+
+    it("rejects category updates from users with read-only permission with 403", async () => {
+      mockGetUser.mockResolvedValueOnce({
+        data: { user: { id: BOB_ID, email: "bob@example.com" } },
+        error: null,
+      });
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: BOB_ID, email: "bob@example.com", role: "user", is_active: true }],
+      });
+      // getDocumentWithAccess returns read
+      mockQuery.mockResolvedValueOnce({
+        rows: [
+          {
+            id: DOC_ID,
+            owner_id: ALICE_ID,
+            title: "Tax_2025.pdf",
+            category: "General",
+            description: null,
+            access_level: "read",
+          },
+        ],
+      });
+      // Audit log for denied
+      mockQuery.mockResolvedValueOnce({});
+
+      const res = await request(app)
+        .patch(`/api/documents/${DOC_ID}`)
+        .set("Authorization", "Bearer bob-token")
+        .send({
+          category: "Hacked Category",
+        });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatch(/read-only users cannot edit/i);
+    });
+  });
+
+  // =========================================================================
+  // 10. AUTH PROFILE FULL_NAME PRESERVATION TEST
+  // =========================================================================
+  describe("Auth Profile Full Name Preservation", () => {
+    it("preserves database-updated full_name using COALESCE in user upsert", async () => {
+      mockGetUser.mockResolvedValueOnce({
+        data: {
+          user: {
+            id: ALICE_ID,
+            email: "alice@example.com",
+            user_metadata: { full_name: "Stale Metadata Name" },
+          },
+        },
+        error: null,
+      });
+
+      // The upsert query in authenticate middleware
+      mockQuery.mockResolvedValueOnce({
+        rows: [
+          {
+            id: ALICE_ID,
+            email: "alice@example.com",
+            full_name: "Alice Real User", // Preserved user-edited name
+            role: "user",
+            is_active: true,
+          },
+        ],
+      });
+
+      const res = await request(app)
+        .get("/api/me")
+        .set("Authorization", "Bearer alice-token");
+
+      expect(res.status).toBe(200);
+      expect(res.body.user.full_name).toBe("Alice Real User");
+
+      // Verify the upsert query uses COALESCE(public.users.full_name, EXCLUDED.full_name)
+      const upsertCall = mockQuery.mock.calls[0];
+      expect(upsertCall[0]).toContain(
+        "full_name = COALESCE(public.users.full_name, EXCLUDED.full_name)"
+      );
+    });
   });
 });
+

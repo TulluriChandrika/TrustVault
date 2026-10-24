@@ -4,13 +4,13 @@
 
 @layer base {
   :root {
-    --background: 210 40% 98%;
+    --background: 240 60% 99%;
     --foreground: 222 47% 11%;
     --card: 0 0% 100%;
     --card-foreground: 222 47% 11%;
     --popover: 0 0% 100%;
     --popover-foreground: 222 47% 11%;
-    --primary: 217 91% 52%;
+    --primary: 246 54% 56%;
     --primary-foreground: 0 0% 100%;
     --secondary: 210 40% 96%;
     --secondary-foreground: 222 47% 11%;
@@ -22,17 +22,17 @@
     --destructive-foreground: 0 0% 100%;
     --border: 214 32% 91%;
     --input: 214 32% 91%;
-    --ring: 217 91% 52%;
+    --ring: 246 54% 56%;
     --radius: 0.5rem;
 
     --sidebar-background: 222 47% 9%;
     --sidebar-foreground: 210 40% 98%;
-    --sidebar-primary: 217 91% 60%;
+    --sidebar-primary: 246 54% 56%;
     --sidebar-primary-foreground: 210 40% 98%;
     --sidebar-accent: 217 33% 17%;
     --sidebar-accent-foreground: 210 40% 98%;
     --sidebar-border: 217 33% 18%;
-    --sidebar-ring: 217 91% 60%;
+    --sidebar-ring: 246 54% 56%;
 
     /* Existing TrustVault legacy tokens preserved */
     --bg-primary: #f8fafc;
@@ -47,7 +47,7 @@
     --font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 
     /* Exact TrustVault Reference Design Tokens */
-    --primary: #6153CC;
+    --brand-primary: #6153CC;
     --primary-link: #554DE7;
     --primary-gradient-start: #7074EE;
     --primary-gradient-end: #605BEB;
@@ -56,7 +56,7 @@
     --text-secondary: #6B7B9F;
     --icon-muted: #8A93B6;
 
-    --background: #FBFBFE;
+    --brand-background: #FBFBFE;
     --background-center: #F6F8FD;
     --lavender-top-left: #D5D7FC;
     --lavender-bottom-left: #EBECFD;

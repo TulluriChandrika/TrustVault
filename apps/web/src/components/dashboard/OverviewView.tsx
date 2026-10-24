@@ -38,8 +38,8 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
     (d) => d.owner_id !== profile?.id && d.access_level !== "owner"
   );
 
-  // Calculate total size in bytes
-  const totalSizeBytes = documents.reduce((acc, doc) => {
+  // Calculate total size in bytes for owned documents only
+  const totalSizeBytes = ownedDocuments.reduce((acc, doc) => {
     const sz = typeof doc.size_bytes === "number" ? doc.size_bytes : parseInt(doc.size_bytes, 10) || 0;
     return acc + sz;
   }, 0);

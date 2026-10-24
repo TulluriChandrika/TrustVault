@@ -927,7 +927,8 @@ documentsRouter.patch("/:id", async (req: Request, res: Response): Promise<void>
       if (body.description === null || body.description === "") {
         newDescription = null;
       } else {
-        newDescription = sanitizeString(body.description);
+        const sanitized = sanitizeString(body.description);
+        newDescription = sanitized && sanitized.length > 0 ? sanitized : null;
         if (newDescription && newDescription.length > 1000) {
           res.status(400).json({ error: "Description must not exceed 1000 characters" });
           return;

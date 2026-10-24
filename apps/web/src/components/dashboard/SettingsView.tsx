@@ -2,10 +2,7 @@ import React, { useState, useEffect } from "react";
 import {
   User,
   KeyRound,
-  Activity,
-  RefreshCw,
   CheckCircle2,
-  AlertCircle,
   LogOut,
   Info,
   Pencil,
@@ -14,11 +11,8 @@ import {
   Loader2,
 } from "lucide-react";
 import {
-  checkApiHealth,
   updateUserProfile,
   type UserProfile,
-  type HealthResponse,
-  API_BASE_URL,
 } from "@/lib/api";
 
 interface SettingsViewProps {
@@ -36,9 +30,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onSignOut,
   onOpenChangePassword,
 }) => {
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [healthLoading, setHealthLoading] = useState(false);
-
   // Full name edit state
   const [isEditingName, setIsEditingName] = useState(false);
   const [fullNameInput, setFullNameInput] = useState(profile?.full_name || "");
@@ -52,16 +43,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   useEffect(() => {
     setFullNameInput(profile?.full_name || "");
   }, [profile?.full_name]);
-
-  const handlePingHealth = async () => {
-    setHealthLoading(true);
-    try {
-      const data = await checkApiHealth();
-      setHealth(data);
-    } finally {
-      setHealthLoading(false);
-    }
-  };
 
   const handleSaveFullName = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -272,61 +253,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           >
             Change Password
           </button>
-        </div>
-      </div>
-
-      {/* Backend API Health & Monitoring */}
-      <div className="rounded-2xl bg-white border border-[#E8E6F8] shadow-sm p-6">
-        <div className="flex items-center gap-3 pb-5 border-b border-[#E8E6F8]">
-          <div className="h-10 w-10 rounded-xl bg-[#6153CC]/10 text-[#6153CC] flex items-center justify-center">
-            <Activity className="h-5 w-5" />
-          </div>
-          <div>
-            <h3 className="text-base font-bold text-[#101936]">System Health & API Diagnostics</h3>
-            <p className="text-[11.5px] text-[#6B7B9F]">
-              Verify connectivity with the Express backend and PostgreSQL database
-            </p>
-          </div>
-        </div>
-
-        <div className="mt-5 space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-xl bg-[#FBFBFE] border border-[#E8E6F8]">
-            <div>
-              <span className="text-[11px] font-semibold text-[#8A93B6] uppercase">API Endpoint Base</span>
-              <p className="font-mono text-xs text-[#101936] mt-0.5">
-                {API_BASE_URL || "(Relative proxy via Vite dev server)"}
-              </p>
-            </div>
-            <button
-              onClick={handlePingHealth}
-              disabled={healthLoading}
-              className="px-4 py-2 rounded-xl border border-[#E2E0F2] hover:bg-white text-xs font-semibold text-[#554DE7] flex items-center gap-1.5 transition-all shadow-sm"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${healthLoading ? "animate-spin" : ""}`} />
-              <span>Ping /health</span>
-            </button>
-          </div>
-
-          {health && (
-            <div
-              className={`p-3.5 rounded-xl border text-xs font-medium flex items-center gap-2 ${
-                health.status === "ok"
-                  ? "bg-emerald-50 border-emerald-200 text-emerald-800"
-                  : "bg-rose-50 border-rose-200 text-rose-800"
-              }`}
-            >
-              {health.status === "ok" ? (
-                <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
-              ) : (
-                <AlertCircle className="h-4 w-4 text-rose-600 shrink-0" />
-              )}
-              <div className="flex-1">
-                <strong>Status:</strong> {health.status.toUpperCase()} &bull; <strong>Time:</strong>{" "}
-                {health.timestamp || "N/A"}
-                {health.error && <span className="block mt-0.5 text-rose-700">Error: {health.error}</span>}
-              </div>
-            </div>
-          )}
         </div>
       </div>
 

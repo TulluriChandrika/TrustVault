@@ -58,7 +58,11 @@ export function App() {
         friendlyError =
           "Your email confirmation link has expired. Please sign in or request a fresh confirmation link.";
       } else if (errorDescription) {
-        friendlyError = decodeURIComponent(errorDescription.replace(/\+/g, " "));
+        try {
+          friendlyError = decodeURIComponent(errorDescription.replace(/\+/g, " "));
+        } catch {
+          friendlyError = errorDescription.replace(/\+/g, " ");
+        }
       }
       setConfirmationError(friendlyError);
       window.history.replaceState(null, "", window.location.pathname);
@@ -155,7 +159,9 @@ export function App() {
     return (
       <ResetPasswordPage
         onNavigateToLogin={() => setAuthView("login")}
-        onSuccess={() => setAuthView("login")}
+        onSuccess={() => {
+          // Do not immediately redirect: ResetPasswordForm renders a success screen with "Return to Login" button
+        }}
       />
     );
   }
@@ -168,7 +174,7 @@ export function App() {
           onNavigateToLogin={() => setAuthView("login")}
           onSuccess={() => {
             setConfirmationSuccess(
-              "Account created! Please check your email for the confirmation link before signing in."
+              "Account created successfully! Please sign in."
             );
             setAuthView("login");
           }}

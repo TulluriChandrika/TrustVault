@@ -86,7 +86,7 @@ export function ResetPasswordForm({
   const handleReturnToLogin = async () => {
     // Sign out to clear any transient recovery session so user can log in with their fresh credentials
     try {
-      await supabase.auth.signOut();
+      await supabase.auth.signOut({ scope: "local" });
     } catch {
       // Ignore sign-out errors
     }

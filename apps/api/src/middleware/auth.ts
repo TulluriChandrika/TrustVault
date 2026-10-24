@@ -89,7 +89,7 @@ export async function requireAuth(
       VALUES ($1, $2, $3, 'SUPABASE_AUTH_MANAGED', 'user', true)
       ON CONFLICT (id) DO UPDATE
       SET email = EXCLUDED.email,
-          full_name = COALESCE(EXCLUDED.full_name, public.users.full_name)
+          full_name = COALESCE(public.users.full_name, EXCLUDED.full_name)
       RETURNING id, email, full_name, role, is_active, created_at;
     `;
 

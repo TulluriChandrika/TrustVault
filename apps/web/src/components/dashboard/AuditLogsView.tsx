@@ -121,11 +121,10 @@ export const AuditLogsView: React.FC<AuditLogsViewProps> = ({ token, profile }) 
   const [actionFilter, setActionFilter] = useState("all");
   const [outcomeFilter, setOutcomeFilter] = useState("all");
 
-  useEffect(() => {
-    loadLogs();
-  }, [isAdmin, actionFilter, outcomeFilter]);
+  const activeRequestIdRef = React.useRef(0);
 
-  const loadLogs = async () => {
+  const loadLogs = React.useCallback(async () => {
+    const requestId = ++activeRequestIdRef.current;
     setLoading(true);
     setError(null);
     try {
@@ -135,7 +134,9 @@ export const AuditLogsView: React.FC<AuditLogsViewProps> = ({ token, profile }) 
           action: actionFilter !== "all" ? actionFilter : undefined,
           outcome: outcomeFilter !== "all" ? outcomeFilter : undefined,
         });
-        setLogs(res.logs || []);
+        if (requestId === activeRequestIdRef.current) {
+          setLogs(res.logs || []);
+        }
       } else {
         const userLogs = await fetchActivityLogs(token, { limit: 50 });
         let filtered = userLogs;
@@ -145,14 +146,28 @@ export const AuditLogsView: React.FC<AuditLogsViewProps> = ({ token, profile }) 
         if (outcomeFilter !== "all") {
           filtered = filtered.filter((l) => l.outcome === outcomeFilter);
         }
-        setLogs(filtered);
+        if (requestId === activeRequestIdRef.current) {
+          setLogs(filtered);
+        }
       }
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to load activity logs.");
+      if (requestId === activeRequestIdRef.current) {
+        setError(err instanceof Error ? err.message : "Failed to load activity logs.");
+      }
     } finally {
-      setLoading(false);
+      if (requestId === activeRequestIdRef.current) {
+        setLoading(false);
+      }
     }
-  };
+  }, [isAdmin, actionFilter, outcomeFilter, token]);
+
+  useEffect(() => {
+    loadLogs();
+    return () => {
+      // Invalidate in-flight requests on dependency change or unmount
+      activeRequestIdRef.current += 1;
+    };
+  }, [loadLogs]);
 
   const formatActionName = (action: string): { label: string; icon: React.ReactNode } => {
     switch (action) {
