@@ -23,9 +23,26 @@ const FRONTEND_ORIGIN = (process.env.FRONTEND_ORIGIN || "http://localhost:5173")
 // Strict-Transport-Security, X-Frame-Options, etc.
 app.use(helmet());
 
-// Rate limiting — in-memory store; suitable for single-instance deployments.
-if (process.env.TRUST_PROXY) {
-  app.set("trust proxy", process.env.TRUST_PROXY);
+// Rate limiting & proxy configuration
+if (process.env.TRUST_PROXY !== undefined && process.env.TRUST_PROXY.trim() !== "") {
+  const tp = process.env.TRUST_PROXY.trim().toLowerCase();
+  if (tp === "true") {
+    app.set("trust proxy", true);
+  } else if (tp === "false") {
+    app.set("trust proxy", false);
+  } else if (/^\d+$/.test(tp)) {
+    app.set("trust proxy", parseInt(tp, 10));
+  } else {
+    try {
+      app.set("trust proxy", process.env.TRUST_PROXY.trim());
+    } catch (err) {
+      console.warn("Invalid TRUST_PROXY configuration, falling back to 1:", err);
+      app.set("trust proxy", 1);
+    }
+  }
+} else if (process.env.NODE_ENV === "production") {
+  // In cloud deployments (Render, Fly, AWS), trust the upstream ingress proxy
+  app.set("trust proxy", 1);
 }
 
 app.use(
