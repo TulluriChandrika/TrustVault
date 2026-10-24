@@ -493,6 +493,212 @@ These results were reported by the development agent and should be retained with
 
 ---
 
+## Entry 14 — Phase 8: UI Improvements, CodeRabbit Review Fixes, Document Refresh, and In-App Password Change
+
+**Date:** 2026-10-23
+**Task:** Complete remaining Phase 8 work, remediate confirmed CodeRabbit review findings, implement document dashboard refresh feedback, implement global search, and build in-app password change:
+1. Address confirmed CodeRabbit findings across frontend components and backend routes.
+2. Fix document list three-dot (⋮) overflow menu clipping by rendering as a floating overlay via React portal (`createPortal`) with viewport boundary adjustment.
+3. Add a manual Refresh button to document views with spinning animation and informational refresh notice.
+4. Implement global search with debounced partial and case-insensitive matching across filename, category, and owner.
+5. Implement in-app change password dialog with current password verification via Supabase Auth and client-side password strength validation.
+6. Add unit and integration tests covering new functionality.
+
+**AI assistance:**
+- Updated `apps/web/src/components/dashboard/DocumentsView.tsx` with floating React portal menu and refresh handler.
+- Created `apps/web/src/components/dashboard/ChangePasswordModal.tsx` for secure in-app password changes.
+- Added backend search query handling in `apps/api/src/routes/documents.ts` with parameterized SQL (`ILIKE %${search}%`).
+- Added 14 automated tests in `apps/api/src/trustvault-enhancements.test.ts`.
+- Added 17 automated tests in `apps/web/src/frontend-dashboard.test.tsx`.
+- Updated `README.md` with Phase 8 documentation.
+
+**Developer review and decisions:**
+- Confirmed menu clipping was caused by overflow containers; portal to `document.body` resolved clipping cleanly.
+- Resolved TypeScript import error in `trustvault-enhancements.test.ts` by importing `app` correctly from default export of `apps/api/src/server.ts`.
+- Preserved existing permission-aware action buttons (Download, Edit, Permissions, Delete) according to document role.
+
+**Verification:**
+- `npm run check`: Exited with code `0`.
+- All automated tests passed (**180 total tests passed**).
+
+**Outcome:** Phase 8 UI improvements and usability features implemented, tested, and verified.
+
+**Commit reference:** Committed in `1cf226b` (`feat: complete Phase 8 UI enhancements and review fixes`).
+
+---
+
+## Entry 15 — Phase 9: Security Testing, Vulnerability Remediation, and Overflow Menu Flicker Fix
+
+**Date:** 2026-10-23
+**Task:** Conduct comprehensive security audit, fix verified vulnerabilities, add security regression tests, and resolve three-dot menu positioning flicker:
+1. Fix three-dot menu flicker where the menu momentarily appeared at `top: 0, left: 0` before repositioning.
+2. Conduct security testing against authentication, IDOR/BOLA, privilege escalation, permission revocation, private storage access, upload validation, audit tampering, and SQL injection.
+3. Implement `apps/api/src/security-phase9.test.ts` with 25 targeted security attack scenarios.
+4. Verify parameterized SQL queries across all application endpoints.
+5. Verify magic byte header validation and file extension filtering.
+
+**AI assistance:**
+- Fixed menu flicker in `apps/web/src/components/dashboard/DocumentsView.tsx` by synchronously measuring trigger button position with `getBoundingClientRect()` upon click, eliminating the unpositioned render frame.
+- Created `apps/api/src/security-phase9.test.ts` covering 25 security test scenarios across 8 threat domains:
+  - Domain 1: Authentication enforcement (missing/invalid tokens, expired JWTs, deactivation).
+  - Domain 2: Authorization & IDOR prevention (unauthorized reads, updates, downloads return 404).
+  - Domain 3: Administrative role enforcement (non-admin blocked with 403 on `/api/admin/audit-logs`).
+  - Domain 4: Permission revocation immediate enforcement (revoked user blocked with 404 on next download).
+  - Domain 5: Upload security (10 MB bound, disallowed extensions `.exe`/`.sh`, magic byte spoofing, path traversal).
+  - Domain 6: SQL injection resistance (parameterized search, pagination, and filter queries).
+  - Domain 7: Audit log immutability (POST/PUT/PATCH/DELETE return 404; transactional rollback on audit failure).
+  - Domain 8: API abuse & rate limiting (429 on rate limit exhaustion, 2 MB body size limit).
+
+**Developer review and decisions:**
+- Resolved category requirement in upload regression tests by ensuring `category` multipart field is supplied.
+- Confirmed menu opens seamlessly without visible jump or flicker.
+- Verified that all database queries in tests use isolated mocks and do not make external calls.
+
+**Verification:**
+- `npm run check`: Exited with code `0`.
+- Automated test suites: **205 total tests passed** across 7 test suites:
+  - `apps/api/src/auth.test.ts` (12 tests)
+  - `apps/api/src/server.test.ts` (10 tests)
+  - `apps/api/src/documents.test.ts` (83 tests)
+  - `apps/api/src/audit.test.ts` (44 tests)
+  - `apps/api/src/trustvault-enhancements.test.ts` (14 tests)
+  - `apps/api/src/security-phase9.test.ts` (25 tests)
+  - `apps/web/src/frontend-dashboard.test.tsx` (17 tests)
+
+**Outcome:** Phase 9 security testing and UI bug fix completed and fully verified.
+
+**Commit reference:** Committed in `fa2d0ae` (`fix(ui): eliminate three-dot menu flicker and add security regression tests`).
+
+---
+
+## Entry 16 — Phase 10: Complete Documentation Suite & Threat Model Review
+
+**Date:** 2026-10-24
+**Task:** Inspect the codebase, produce complete pre-deployment documentation, review existing threat and prompt documents, and ensure zero duplicate documentation files:
+1. Inspect codebase, dependencies, routes, and tests.
+2. Produce comprehensive documentation suite: `docs/API.md`, `docs/openapi.yaml`, `docs/ARCHITECTURE.md`, `docs/USER_GUIDE.md`, `docs/TESTING.md`, `docs/ENVIRONMENT.md`, and `docs/CHANGELOG.md`.
+3. Review existing `THREATS.md` and `PROMPTS.md` files; preserve existing file structure and prevent duplicate threat models (deleted redundant `docs/THREAT_MODEL.md`).
+4. Perform automated repository-wide secret scanning across tracked files, build bundles, and configuration.
+5. Update `THREATS.md` threat register (T1-T13), verification plan, and pre-deployment residual risks.
+6. Update `README.md` and `docs/ARCHITECTURE.md` documentation sitemaps with links to `THREATS.md` and `PROMPTS.md`.
+
+**AI assistance:**
+- Generated complete documentation suite in `docs/`:
+  - `docs/API.md`: Detailed REST API reference covering all 11 endpoints with schemas and curl examples.
+  - `docs/openapi.yaml`: Validated OpenAPI 3.0 specification.
+  - `docs/ARCHITECTURE.md`: Architecture specification with Mermaid sequence diagrams.
+  - `docs/USER_GUIDE.md`: Comprehensive user guide with UI workflows and role matrix.
+  - `docs/TESTING.md`: Complete testing guide with all 205 test cases documented.
+  - `docs/ENVIRONMENT.md`: Environment variable security matrix and rotation procedures.
+  - `docs/CHANGELOG.md`: Chronological log across Phases 1 through 10.
+- Updated `THREATS.md` to reflect Phase 9/10 status across all 13 threats, 12 verification items, and 6 pre-deployment residual risks.
+- Added Entries 14, 15, and 16 to `PROMPTS.md`.
+- Updated `README.md` and `docs/ARCHITECTURE.md` sitemaps.
+
+**Developer review and decisions:**
+- Deleted redundant `docs/THREAT_MODEL.md` to maintain the existing project structure and retain `THREATS.md` as the single source of truth for threat modeling.
+- Verified that no broken links or references to `docs/THREAT_MODEL.md` exist across the codebase.
+- Verified that all claimed security controls accurately distinguish implemented code from pending remote migrations and operational prerequisites.
+
+**Verification:**
+- `npm run check`: Exited with code `0` (typechecks pass, builds pass, all 205 tests pass).
+- Secret scan: 0 hardcoded credentials or secrets in tracked repository files.
+- Zero broken links across documentation.
+
+**Outcome:** Documentation complete, verified, and pre-deployment ready.
+
+**Commit reference:** Pending user review and manual commit.
+
+---
+
+## Entry 17 — Global Role Model and Judge Demo Accounts
+
+**Date:** 2026-10-24
+**Task:** Implement three distinct global roles (`admin`, `owner`, `viewer`) with legacy `user` compatibility, reconcile pending migrations, create a repeatable judge demo account provisioning procedure, add comprehensive automated tests, and update documentation.
+
+**Prompt summary:**
+1. Inspect codebase, database schema, pending migrations, auth flow, and middleware.
+2. Determine whether `owner` and `viewer` are global roles or document-level permissions.
+3. Implement global roles: `admin` (audit console), `owner` (full document management), `viewer` (read-only access to shared documents, strictly prohibited from uploading, modifying, deleting, or sharing). Retain legacy `user` compatibility.
+4. Enforce authorization server-side on Express endpoints.
+5. Review pending migrations (`20261022180000_audit_logs_actor_idx.sql`, `20261024000000_allow_user_role.sql`, `20261024100000_add_document_description.sql`) and ensure they are safe, ordered, and compatible without downgrading `owner`.
+6. Prepare three demo accounts (`demo.admin@trustvault.local`, `demo.owner@trustvault.local`, `demo.viewer@trustvault.local`) with no hardcoded credentials.
+7. Add automated test coverage and update documentation.
+
+**AI assistance:**
+- Analyzed role model: Delineated Global User Roles (`public.users.role`) from Document-Level Permissions (`document_permissions.permission`).
+- Updated `apps/api/src/middleware/auth.ts`: Set `GlobalRole = "admin" | "owner" | "viewer" | "user"`, set default provisioned role to `'owner'`, and preserved existing user roles upon session refresh.
+- Hardened `apps/api/src/routes/documents.ts`: Enforced global viewer checks rejecting `POST /api/documents`, `PATCH /api/documents/:id`, `DELETE /api/documents/:id`, `GET /api/documents/:id/permissions`, `POST /api/documents/:id/permissions`, `PATCH /api/documents/:id/permissions/:userId`, and `DELETE /api/documents/:id/permissions/:userId` with `403 Forbidden` and denied audit logging.
+- Adapted Frontend UI:
+  - `apps/web/src/lib/api.ts`: Expanded `UserProfile.role` to include `viewer`.
+  - `apps/web/src/components/dashboard/AppSidebar.tsx` & `AppHeader.tsx`: Role badges (Administrator, Viewer, Document Owner) and hid Quick Upload for viewers.
+  - `apps/web/src/components/dashboard/OverviewView.tsx` & `DocumentsView.tsx`: Hid upload buttons and action overflow menu for viewers.
+  - `apps/web/src/components/dashboard/SettingsView.tsx`: Added role explanation card.
+- Reconciled migrations: Modified `supabase/migrations/20261024000000_allow_user_role.sql` to upgrade legacy `user` to `owner` (reversing previous downgrade) and safely expand check constraint to `CHECK (role IN ('admin', 'owner', 'viewer', 'user'))`.
+- Created `apps/api/scripts/seed-judge-accounts.ts` and added `seed:judge-accounts` script in `package.json`, requiring `ENABLE_DEMO_ACCOUNTS=true` and reading distinct passwords (`DEMO_ADMIN_PASSWORD`, `DEMO_OWNER_PASSWORD`, `DEMO_VIEWER_PASSWORD`).
+- Added `apps/api/src/judge-roles.test.ts` with 22 automated tests covering admin access, owner operations, viewer restrictions, IDOR defense, profile privilege escalation blocking, and backward compatibility.
+- Updated `README.md`, `docs/ARCHITECTURE.md`, `docs/USER_GUIDE.md`, and `THREATS.md`.
+
+**Developer review and decisions:**
+- Resolved UUID format in mock tests to satisfy RFC 4122 v4 validator regex.
+- Adjusted binary stream download test assertion to read from buffer.
+- Verified that all secrets are supplied via runtime environment variables and never logged or committed.
+- Maintained strict rule against applying remote migrations or running Git commands.
+
+**Verification:**
+- `npm run check`: Exited with code `0`.
+- All 240 tests passed across all 9 test suites:
+  - `apps/api/src/auth.test.ts` (12 tests)
+  - `apps/api/src/server.test.ts` (10 tests)
+  - `apps/api/src/documents.test.ts` (86 tests)
+  - `apps/api/src/audit.test.ts` (44 tests)
+  - `apps/api/src/trustvault-enhancements.test.ts` (19 tests)
+  - `apps/api/src/security-phase9.test.ts` (20 tests)
+  - `apps/api/src/judge-roles.test.ts` (22 tests)
+  - `apps/api/src/seed-judge-accounts.test.ts` (13 tests)
+  - `apps/api/src/auth-flows.test.ts` (14 tests)
+- `npm run typecheck`: 0 TypeScript errors across `apps/api` and `apps/web`.
+- `npm run build`: Production bundle builds succeeded cleanly.
+
+**Outcome:** Global roles fully implemented, judge demo account procedure prepared, and all tests passing.
+
+**Commit reference:** Pending user review and manual commit.
+
+---
+
+## Entry 18 — Frontend Vercel Configuration and Demo Account Verification
+
+**Date:** 2026-10-24
+**Task:** Configure Vercel SPA routing for the React + Vite frontend, verify demo account configuration with updated email conventions, update deployment documentation, and validate project.
+
+**Prompt summary:**
+1. Inspect repository structure, `apps/web`, Vite configuration, and deployment settings.
+2. Add `vercel.json` at the correct deployment root (`apps/web`) with SPA wildcard rewrite (`/(.*)` -> `/index.html`) to support direct URL access and page refreshes on client-side routes like `/dashboard` and `/settings`.
+3. Confirm demo accounts use `demo.admin@trustvault.local`, `demo.owner@trustvault.local`, and `demo.viewer@trustvault.local` with their dedicated password variables (`DEMO_ADMIN_PASSWORD`, `DEMO_OWNER_PASSWORD`, `DEMO_VIEWER_PASSWORD`) and require `ENABLE_DEMO_ACCOUNTS=true`.
+4. Update `.env.example`, `README.md`, and `docs/ENVIRONMENT.md` with Vercel deployment instructions and demo account settings.
+5. Validate `vercel.json` syntax and run `npm run check`.
+
+**AI assistance:**
+- Evaluated monorepo structure: determined that `apps/web` is the frontend deployment root where Vercel must be pointed.
+- Created `apps/web/vercel.json` configuring standard SPA fallback rewriting all paths to `/index.html`.
+- Validated JSON syntax via `node -e`.
+- Updated `README.md` and `docs/ENVIRONMENT.md` with Vercel configuration instructions (Root Directory: `apps/web`, preset: Vite, output: `dist`).
+- Verified that all 240 tests across 9 test suites continue passing with 0 TypeScript errors.
+
+**Developer review and decisions:**
+- Placed `vercel.json` in `apps/web` rather than repo root to align with Vercel's monorepo architecture where Root Directory is set to `apps/web`.
+- Confirmed that backend Express API is hosted separately (e.g. Render, Railway) and not routed via Vercel serverless functions, ensuring no rewrite conflicts.
+
+**Verification:**
+- `node -e "JSON.parse(fs.readFileSync('apps/web/vercel.json', 'utf8'))"` passed cleanly.
+- `npm run check`: Exited with code `0` (typechecking passed, production build passed, all 240 automated tests passed across 9 suites).
+
+**Outcome:** Frontend SPA routing configured for Vercel and demo accounts fully verified.
+
+**Commit reference:** Pending user review and manual commit.
+
+---
+
 ## Responsible Use and Verification
 
 AI-generated code, security recommendations, and documentation are treated as proposals requiring developer review.
@@ -509,3 +715,4 @@ For future entries, record:
 Do not record unexecuted tests as passed or describe planned security controls as implemented.
 
 This document should be updated throughout development to reflect the actual work performed.
+

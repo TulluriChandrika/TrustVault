@@ -69,7 +69,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   };
 
-  const displayRole = profile?.role === "admin" ? "Administrator" : "User";
+  const displayRole =
+    profile?.role === "admin"
+      ? "Administrator"
+      : profile?.role === "viewer"
+        ? "Viewer"
+        : "Document Owner";
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -172,10 +177,25 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <div className="p-3.5 rounded-xl bg-[#FBFBFE] border border-[#E8E6F8]">
             <span className="text-[11px] font-semibold text-[#8A93B6] uppercase">Account Role</span>
             <div className="mt-1">
-              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-[#6153CC]/15 text-[#554DE7] uppercase tracking-wide">
+              <span
+                className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold uppercase tracking-wide ${
+                  profile?.role === "admin"
+                    ? "bg-purple-100 text-purple-800 border border-purple-200"
+                    : profile?.role === "viewer"
+                      ? "bg-sky-100 text-sky-800 border border-sky-200"
+                      : "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                }`}
+              >
                 {displayRole}
               </span>
             </div>
+            <p className="text-[11px] text-[#6B7B9F] mt-1.5 leading-relaxed">
+              {profile?.role === "admin"
+                ? "Full administrative access to the Admin Console, security metrics, and system-wide audit logs."
+                : profile?.role === "viewer"
+                  ? "Read-only access to documents specifically shared with you. Uploading, editing, sharing, and deleting are restricted."
+                  : "Can upload, manage, edit, share, and delete documents you own, and view documents shared with you."}
+            </p>
           </div>
 
           <div className="p-3.5 rounded-xl bg-[#FBFBFE] border border-[#E8E6F8]">

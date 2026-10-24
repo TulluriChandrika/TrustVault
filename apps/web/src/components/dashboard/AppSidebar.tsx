@@ -48,6 +48,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   documentCounts,
 }) => {
   const isAdmin = profile?.role === "admin";
+  const isViewer = profile?.role === "viewer";
 
   const navItems = [
     {
@@ -74,12 +75,16 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       icon: Share2,
       badge: documentCounts.shared,
     },
-    {
-      id: "upload" as DashboardView,
-      label: "Upload Document",
-      icon: UploadCloud,
-      badge: null,
-    },
+    ...(!isViewer
+      ? [
+          {
+            id: "upload" as DashboardView,
+            label: "Upload Document",
+            icon: UploadCloud,
+            badge: null,
+          },
+        ]
+      : []),
     {
       id: "activity" as DashboardView,
       label: "Activity & Audit",
@@ -207,9 +212,21 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
                 {profile?.full_name || profile?.email || "User"}
               </div>
               <div className="flex items-center gap-1.5 mt-0.5">
-                <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                <span
+                  className={`inline-block h-1.5 w-1.5 rounded-full ${
+                    profile?.role === "admin"
+                      ? "bg-purple-500"
+                      : profile?.role === "viewer"
+                        ? "bg-sky-500"
+                        : "bg-emerald-500"
+                  }`}
+                />
                 <span className="text-[10px] font-medium text-[#6B7B9F] uppercase tracking-wider">
-                  {profile?.role === "admin" ? "Administrator" : "User"}
+                  {profile?.role === "admin"
+                    ? "Administrator"
+                    : profile?.role === "viewer"
+                      ? "Viewer"
+                      : "Document Owner"}
                 </span>
               </div>
             </div>

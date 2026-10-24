@@ -215,6 +215,23 @@ documentsRouter.post(
   handleUploadMiddleware,
   async (req: Request, res: Response): Promise<void> => {
     const userId = req.user!.id;
+    const userRole = req.user!.role;
+
+    // Global role enforcement: Viewers cannot create or upload documents
+    if (userRole === "viewer") {
+      await recordAuditLog({
+        actorId: userId,
+        documentId: null,
+        action: "document:create",
+        outcome: "denied",
+        details: { reason: "viewer_role_upload_forbidden" },
+      });
+      res.status(403).json({
+        error: "Viewers have read-only access and are not permitted to upload documents",
+      });
+      return;
+    }
+
     const body = req.body || {};
 
     // Reject client-supplied immutable or internal fields
@@ -841,8 +858,24 @@ documentsRouter.get("/:id/download", async (req: Request, res: Response): Promis
  */
 documentsRouter.patch("/:id", async (req: Request, res: Response): Promise<void> => {
   const userId = req.user!.id;
+  const userRole = req.user!.role;
   const documentId = req.params.id;
   const body = req.body || {};
+
+  // Global role enforcement: Viewers cannot edit documents
+  if (userRole === "viewer") {
+    await recordAuditLog({
+      actorId: userId,
+      documentId: isValidUUID(documentId) ? documentId : null,
+      action: "document:update",
+      outcome: "denied",
+      details: { reason: "viewer_role_edit_forbidden" },
+    });
+    res.status(403).json({
+      error: "Viewers have read-only access and are not permitted to edit document metadata",
+    });
+    return;
+  }
 
   if (!isValidUUID(documentId)) {
     res.status(400).json({ error: "Invalid document ID format" });
@@ -1062,7 +1095,23 @@ documentsRouter.patch("/:id", async (req: Request, res: Response): Promise<void>
  */
 documentsRouter.delete("/:id", async (req: Request, res: Response): Promise<void> => {
   const userId = req.user!.id;
+  const userRole = req.user!.role;
   const documentId = req.params.id;
+
+  // Global role enforcement: Viewers cannot delete documents
+  if (userRole === "viewer") {
+    await recordAuditLog({
+      actorId: userId,
+      documentId: isValidUUID(documentId) ? documentId : null,
+      action: "document:delete",
+      outcome: "denied",
+      details: { reason: "viewer_role_delete_forbidden" },
+    });
+    res.status(403).json({
+      error: "Viewers have read-only access and are not permitted to delete documents",
+    });
+    return;
+  }
 
   if (!isValidUUID(documentId)) {
     res.status(400).json({ error: "Invalid document ID format" });
@@ -1148,7 +1197,23 @@ documentsRouter.delete("/:id", async (req: Request, res: Response): Promise<void
  */
 documentsRouter.get("/:id/permissions", async (req: Request, res: Response): Promise<void> => {
   const userId = req.user!.id;
+  const userRole = req.user!.role;
   const documentId = req.params.id;
+
+  // Global role enforcement: Viewers cannot manage or list permissions
+  if (userRole === "viewer") {
+    await recordAuditLog({
+      actorId: userId,
+      documentId: isValidUUID(documentId) ? documentId : null,
+      action: "permission:list",
+      outcome: "denied",
+      details: { reason: "viewer_role_list_permissions_forbidden" },
+    });
+    res.status(403).json({
+      error: "Viewers have read-only access and cannot view document permissions",
+    });
+    return;
+  }
 
   if (!isValidUUID(documentId)) {
     res.status(400).json({ error: "Invalid document ID format" });
@@ -1211,8 +1276,24 @@ documentsRouter.get("/:id/permissions", async (req: Request, res: Response): Pro
  */
 documentsRouter.post("/:id/permissions", async (req: Request, res: Response): Promise<void> => {
   const userId = req.user!.id;
+  const userRole = req.user!.role;
   const documentId = req.params.id;
   const body = req.body || {};
+
+  // Global role enforcement: Viewers cannot grant permissions
+  if (userRole === "viewer") {
+    await recordAuditLog({
+      actorId: userId,
+      documentId: isValidUUID(documentId) ? documentId : null,
+      action: "permission:grant",
+      outcome: "denied",
+      details: { reason: "viewer_role_grant_forbidden" },
+    });
+    res.status(403).json({
+      error: "Viewers have read-only access and cannot grant document permissions",
+    });
+    return;
+  }
 
   if (!isValidUUID(documentId)) {
     res.status(400).json({ error: "Invalid document ID format" });
@@ -1385,8 +1466,24 @@ documentsRouter.delete(
   "/:id/permissions/:userId",
   async (req: Request, res: Response): Promise<void> => {
     const userId = req.user!.id;
+    const userRole = req.user!.role;
     const documentId = req.params.id;
     const targetUserId = req.params.userId;
+
+    // Global role enforcement: Viewers cannot revoke permissions
+    if (userRole === "viewer") {
+      await recordAuditLog({
+        actorId: userId,
+        documentId: isValidUUID(documentId) ? documentId : null,
+        action: "permission:revoke",
+        outcome: "denied",
+        details: { reason: "viewer_role_revoke_forbidden" },
+      });
+      res.status(403).json({
+        error: "Viewers have read-only access and cannot revoke document permissions",
+      });
+      return;
+    }
 
     if (!isValidUUID(documentId) || !isValidUUID(targetUserId)) {
       res.status(400).json({ error: "Invalid UUID format" });
@@ -1484,9 +1581,25 @@ documentsRouter.patch(
   "/:id/permissions/:userId",
   async (req: Request, res: Response): Promise<void> => {
     const userId = req.user!.id;
+    const userRole = req.user!.role;
     const documentId = req.params.id;
     const targetUserId = req.params.userId;
     const body = req.body || {};
+
+    // Global role enforcement: Viewers cannot update permissions
+    if (userRole === "viewer") {
+      await recordAuditLog({
+        actorId: userId,
+        documentId: isValidUUID(documentId) ? documentId : null,
+        action: "permission:update",
+        outcome: "denied",
+        details: { reason: "viewer_role_update_permission_forbidden" },
+      });
+      res.status(403).json({
+        error: "Viewers have read-only access and cannot modify document permissions",
+      });
+      return;
+    }
 
     if (!isValidUUID(documentId) || !isValidUUID(targetUserId)) {
       res.status(400).json({ error: "Invalid UUID format" });

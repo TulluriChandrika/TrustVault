@@ -44,14 +44,6 @@ async function run() {
       CHECK (role IN ('admin', 'user', 'owner', 'viewer'));
     `);
 
-    // Update existing users who had role = 'owner' to 'user'
-    const updateRes = await pool.query(`
-      UPDATE public.users 
-      SET role = 'user' 
-      WHERE role = 'owner';
-    `);
-    console.log(`Updated ${updateRes.rowCount} users from 'owner' to 'user'.`);
-
     console.log("Migration completed successfully!");
   } finally {
     await pool.end();

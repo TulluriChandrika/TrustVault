@@ -96,8 +96,8 @@ describe("Phase 4 Authentication & User Provisioning (/api/me)", () => {
     expect(res.body.error).toBe("Invalid or expired authentication token");
   });
 
-  // Case 5: Missing application user (Safe Idempotent Provisioning with default role 'user')
-  it("safely provisions a new user with default role 'user' and is_active: true", async () => {
+  // Case 5: Missing application user (Safe Idempotent Provisioning with default role 'viewer')
+  it("safely provisions a new user with default role 'viewer' and is_active: true", async () => {
     const newUserId = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
     const newUserEmail = "newuser@example.com";
 
@@ -117,7 +117,7 @@ describe("Phase 4 Authentication & User Provisioning (/api/me)", () => {
           id: newUserId,
           email: newUserEmail,
           full_name: null,
-          role: "user",
+          role: "viewer",
           is_active: true,
           created_at: new Date("2026-10-21T12:00:00Z"),
         },
@@ -133,7 +133,7 @@ describe("Phase 4 Authentication & User Provisioning (/api/me)", () => {
       id: newUserId,
       email: newUserEmail,
       full_name: null,
-      role: "user",
+      role: "viewer",
       is_active: true,
       created_at: "2026-10-21T12:00:00.000Z",
     });

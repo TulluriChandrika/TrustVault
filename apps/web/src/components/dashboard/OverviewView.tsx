@@ -72,13 +72,15 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
           </p>
 
           <div className="flex flex-wrap items-center gap-3 mt-4 pt-1">
-            <button
-              onClick={onOpenUpload}
-              className="px-4 py-2 rounded-xl bg-white text-[#554DE7] hover:bg-[#F6F8FD] font-semibold text-xs shadow-md transition-all flex items-center gap-2 active:scale-[0.98]"
-            >
-              <UploadCloud className="h-4 w-4" />
-              <span>Upload Document</span>
-            </button>
+            {profile?.role !== "viewer" && (
+              <button
+                onClick={onOpenUpload}
+                className="px-4 py-2 rounded-xl bg-white text-[#554DE7] hover:bg-[#F6F8FD] font-semibold text-xs shadow-md transition-all flex items-center gap-2 active:scale-[0.98]"
+              >
+                <UploadCloud className="h-4 w-4" />
+                <span>Upload Document</span>
+              </button>
+            )}
             <button
               onClick={() => onNavigate("all-documents")}
               className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white font-semibold text-xs backdrop-blur-md border border-white/20 transition-all flex items-center gap-1.5"

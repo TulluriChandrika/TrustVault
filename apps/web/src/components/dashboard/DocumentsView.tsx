@@ -433,13 +433,15 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                 <span>Clear Search</span>
               </button>
             )}
-            <button
-              onClick={onOpenUpload}
-              className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#7074EE] to-[#605BEB] hover:from-[#666AE8] hover:to-[#5550E0] text-white text-xs font-semibold shadow-md shadow-[#6153CC]/20 transition-all inline-flex items-center gap-2"
-            >
-              <UploadCloud className="h-4 w-4" />
-              <span>Upload New Document</span>
-            </button>
+            {profile?.role !== "viewer" && (
+              <button
+                onClick={onOpenUpload}
+                className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#7074EE] to-[#605BEB] hover:from-[#666AE8] hover:to-[#5550E0] text-white text-xs font-semibold shadow-md shadow-[#6153CC]/20 transition-all inline-flex items-center gap-2"
+              >
+                <UploadCloud className="h-4 w-4" />
+                <span>Upload New Document</span>
+              </button>
+            )}
           </div>
         </div>
       ) : viewMode === "table" ? (
@@ -458,8 +460,9 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               </thead>
               <tbody className="divide-y divide-[#E8E6F8] text-xs">
                 {filtered.map((doc) => {
-                  const isOwner = doc.owner_id === profile?.id || doc.access_level === "owner";
-                  const canEdit = isOwner || doc.access_level === "edit";
+                  const isViewer = profile?.role === "viewer";
+                  const isOwner = !isViewer && (doc.owner_id === profile?.id || doc.access_level === "owner");
+                  const canEdit = !isViewer && (isOwner || doc.access_level === "edit");
                   const isDownloading = downloadingId === doc.id;
 
                   return (
@@ -600,8 +603,9 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         /* Grid Cards View */
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map((doc) => {
-            const isOwner = doc.owner_id === profile?.id || doc.access_level === "owner";
-            const canEdit = isOwner || doc.access_level === "edit";
+            const isViewer = profile?.role === "viewer";
+            const isOwner = !isViewer && (doc.owner_id === profile?.id || doc.access_level === "owner");
+            const canEdit = !isViewer && (isOwner || doc.access_level === "edit");
             const isDownloading = downloadingId === doc.id;
 
             return (
@@ -729,8 +733,9 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         </div>
       )}
 
-      {/* Floating Portal Overflow Menu rendered directly into document.body */}
+      {/* Floating Portal Overflow Menu rendered directly into document.body (Owners and Editors only) */}
       {floatingMenu &&
+        profile?.role !== "viewer" &&
         typeof document !== "undefined" &&
         createPortal(
           <div

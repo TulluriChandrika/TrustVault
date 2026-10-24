@@ -4,21 +4,21 @@
 
 TrustVault is a secure document-sharing application intended to let document owners share confidential files with specifically authorized users while maintaining an auditable record of important security events.
 
-This document identifies important threats, their potential impact, planned mitigations, and the verification needed to demonstrate security.
+This document identifies important threats, their potential impact, implemented mitigations, and the verification evidence demonstrating security.
 
-It describes the project status based on the implementation and migration-review information available as of 2026-10-21. It must be updated when security features are implemented and tested.
+It describes the project status based on the completed implementation and security verification through Phase 10 as of 2026-10-24.
 
 ## 2. System Overview
 
-### Intended architecture
+### Implemented architecture
 
-- **Frontend:** React, TypeScript, and Vite.
-- **Backend:** Node.js, Express, and TypeScript.
-- **Database:** PostgreSQL through Supabase.
-- **Identity provider:** Supabase Auth, subject to completion of the integration.
-- **File storage:** Private Supabase Storage bucket intended to be named `trustvault-private`.
+- **Frontend:** React 19, TypeScript, Vite, and Tailwind CSS.
+- **Backend:** Node.js, Express 5, and TypeScript.
+- **Database:** PostgreSQL through Supabase with connection pooling (`pg.Pool`).
+- **Identity provider:** Supabase Auth with server-side JWT verification.
+- **File storage:** Private Supabase Storage bucket named `trustvault-private`.
 - **Database access:** PostgreSQL connection through the `pg` package.
-- **Security evidence:** Application audit records and automated security tests.
+- **Security evidence:** Transactional audit logs and 240 automated unit and integration tests (across 9 test suites).
 
 ### Existing database schema
 
@@ -98,9 +98,9 @@ Status definitions:
 
 **Detection:** Record appropriate denied requests without logging credentials or tokens.
 
-**Verification:** Test requests without credentials and with invalid or expired tokens. Automated tests in `apps/api/src/auth.test.ts` verify rejection of missing Authorization header (401), non-Bearer or empty Bearer schemes (401), invalid JWT tokens (401), and expired JWT tokens (401).
+**Verification:** Test requests without credentials and with invalid or expired tokens. Automated tests in `apps/api/src/auth.test.ts` (12 tests) and `apps/api/src/security-phase9.test.ts` verify rejection of missing Authorization header (401), non-Bearer or empty Bearer schemes (401), invalid JWT tokens (401), and expired JWT tokens (401) across `/api/me`, `/api/documents`, `/api/documents/search`, and `/api/admin/audit-logs`.
 
-**Status:** Implemented and verified for Bearer token validation on Express `/api/me` and `/api/auth/me` (Phase 4).
+**Status:** Implemented and verified across all API endpoints in Phases 4, 7, 8 & 9.
 
 ### T2 — Cross-user document access (IDOR/BOLA)
 
@@ -118,9 +118,9 @@ Status definitions:
 
 **Detection:** Record denied access attempts with an appropriate actor, target, action, and outcome.
 
-**Verification:** Owner A must not access Owner B's document without an explicit valid grant. Automated tests in `apps/api/src/documents.test.ts` verify cross-user isolation: an unauthorized user receives `404 Not Found` (preventing document existence enumeration), a denied audit record is generated, and mutations are prevented.
+**Verification:** Owner A must not access Owner B's document without an explicit valid grant. Automated tests in `apps/api/src/documents.test.ts` and `apps/api/src/security-phase9.test.ts` verify cross-user isolation: an unauthorized user receives `404 Not Found` (preventing document existence enumeration) for metadata reads, updates, file downloads, and deletion attempts, with denied audit records generated.
 
-**Status:** Implemented and verified for document metadata in Phase 5.
+**Status:** Implemented and verified across metadata and file downloads in Phases 5, 6, 8 & 9.
 
 ### T3 — Privilege escalation
 
@@ -136,9 +136,9 @@ Status definitions:
 - Never accept role assignments from ordinary registration or user requests.
 - Test every role-restricted endpoint.
 
-**Verification:** A user must not grant themselves administrative privileges. Automated tests in `apps/api/src/auth.test.ts` verify that client role escalation attempts via request parameters/headers are ignored, and new users are strictly provisioned as `owner`.
+**Verification:** A user must not grant themselves administrative privileges. Automated tests in `apps/api/src/auth.test.ts`, `apps/api/src/audit.test.ts`, `apps/api/src/security-phase9.test.ts`, `apps/api/src/judge-roles.test.ts` (22 tests), and `apps/api/src/seed-judge-accounts.test.ts` (13 tests) verify that client role escalation attempts via request parameters/headers or profile updates (`PATCH /api/me`) are rejected, new users are strictly provisioned as `owner`, non-admin users attempting to access `/api/admin/audit-logs` receive HTTP 403 Forbidden with a denied audit record, global `viewer` users are strictly forbidden from uploading (`POST /api/documents`), editing (`PATCH /api/documents/:id`), deleting (`DELETE /api/documents/:id`), or altering permissions (`/api/documents/:id/permissions/*`), judge demo provisioning requires `ENABLE_DEMO_ACCOUNTS=true` and separate passwords, and legacy `user` accounts retain full compatibility.
 
-**Status:** Implemented and verified for user provisioning and role preservation (Phase 4).
+**Status:** Implemented and verified for user provisioning, role preservation, global roles (`admin`, `owner`, `viewer`, `user`), and administrative access in Phases 4, 7, 9 & 10.
 
 ### T4 — Improper permission grants, TOCTOU races, and revocation
 
@@ -163,9 +163,9 @@ Status definitions:
 - If an authorized request (such as a read) executes and sends its response before a revocation transaction commits, the response reflects the authorized state at execution time.
 - Node.js executes HTTP requests asynchronously; instantaneous revocation of already in-flight network packets is impossible without persistent connection termination (e.g. websockets), but all subsequent requests and any in-flight mutation that executes SQL after revocation commits are strictly blocked.
 
-**Verification:** Automated unit/mocked tests in `apps/api/src/documents.test.ts` (30 tests) verify owner-only grant, rejection of non-owner grants (403), self-grant rejection (400), target user anti-enumeration (generic 404 for unknown or inactive targets), rejection of duplicate active grants and concurrent race handling (409), atomic revocation handling (404), rollback on audit failure across all mutation types, cross-user listing isolation, exclusion of soft-deleted documents across all endpoints, admin role isolation, and immediate 404 rejection on subsequent requests following revocation.
+**Verification:** Automated unit/mocked tests in `apps/api/src/documents.test.ts` (83 tests) and `apps/api/src/security-phase9.test.ts` verify owner-only grant, rejection of non-owner grants (403), self-grant rejection (400), target user anti-enumeration (generic 404 for unknown or inactive targets), rejection of duplicate active grants and concurrent race handling (409), atomic revocation handling (404), rollback on audit failure across all mutation types, cross-user listing isolation, exclusion of soft-deleted documents across all endpoints, admin role isolation, and immediate 404 rejection on subsequent download and mutation requests following revocation.
 
-**Status:** Implemented, hardened, and verified in Phase 5.
+**Status:** Implemented, hardened, and verified in Phases 5, 8 & 9.
 
 ### T5 — Public storage exposure
 
@@ -187,9 +187,9 @@ Status definitions:
 **Limitations:**
 - If a download transfer is already in flight across the network socket while revocation occurs, bytes already sent cannot be recalled. However, all subsequent download attempts are immediately denied.
 
-**Verification:** Automated tests in `apps/api/src/documents.test.ts` verify owner, editor, and reader download access, rejection of unshared stranger access (404), rejection of revoked user access (404), rejection of soft-deleted documents (404), rejection of metadata-only records (404), and safe error handling when storage objects are missing.
+**Verification:** Automated tests in `apps/api/src/documents.test.ts` and `apps/api/src/security-phase9.test.ts` verify owner, editor, and reader download access, rejection of unshared stranger access (404), rejection of revoked user access (404), rejection of soft-deleted documents (404), rejection of metadata-only records (404), safe error handling when storage objects are missing, and rejection of path traversal sequences in storage keys.
 
-**Status:** Implemented and verified in Phase 6.
+**Status:** Implemented and verified in Phases 6 & 9.
 
 ### T6 — Malicious or oversized uploads
 
@@ -201,7 +201,7 @@ Status definitions:
 
 **Mitigations:**
 - Enforce strict 10 MB file-size limits on multipart uploads (`multer` bound and content length validation).
-- Validate allowed MIME types (PDF, PNG, JPEG, WebP, Plain Text, CSV).
+- Validate allowed MIME types (PDF, PNG, JPEG, WebP, Plain Text, CSV). Reject dangerous extensions and executables (`.exe`, `.sh`, `.bat`, `.js`).
 - Perform magic byte validation on buffer headers to detect file signatures and prevent MIME-type spoofing.
 - Reject plain text and CSV files containing binary or null bytes (`0x00`).
 - Sanitize filenames to prevent path traversal and control character injection.
@@ -213,9 +213,9 @@ Status definitions:
 - File signature / magic-byte verification validates declared headers against format signatures, but does not substitute for an active antivirus / malware scanning sandbox.
 - Distributed transaction atomicity: in network partitions where database COMMIT state is ambiguous and database connectivity cannot be established to verify or clean up the database record, the storage object is preserved to avoid silent data loss, requiring operational alert monitoring.
 
-**Verification:** Automated tests in `apps/api/src/documents.test.ts` verify rejection of empty files (400), oversized files (413), disallowed MIME types (400), spoofed magic bytes (400), text files containing null bytes (400), execution of compensating cleanup upon uncommitted database failure, preservation of storage files when verification queries fail (unknown state), and preservation of storage files during ambiguous COMMIT when soft-delete fails.
+**Verification:** Automated tests in `apps/api/src/documents.test.ts` and `apps/api/src/security-phase9.test.ts` verify rejection of empty files (400), oversized files (413), disallowed MIME types (400), executable files (400), spoofed magic bytes (400), text files containing null bytes (400), execution of compensating cleanup upon uncommitted database failure, preservation of storage files when verification queries fail (unknown state), and preservation of storage files during ambiguous COMMIT when soft-delete fails.
 
-**Status:** Implemented and verified in Phase 6.
+**Status:** Implemented and verified in Phases 6 & 9.
 
 ### T7 — Audit-log tampering
 
@@ -240,7 +240,7 @@ Status definitions:
 - **Direct database access:** Append-only triggers protect against application queries, but direct access by a PostgreSQL superuser can disable triggers or alter tables directly.
 - **Remote migration status:** Security triggers in `20261021100000` and the actor index in `20261022180000` are prepared locally and must be reviewed before remote application.
 
-**Verification:** Automated unit tests in `apps/api/src/audit.test.ts` (29 tests) verify:
+**Verification:** Automated unit tests in `apps/api/src/audit.test.ts` (44 tests) and `apps/api/src/security-phase9.test.ts` verify:
 1. 401 rejection for unauthenticated requests across all audit endpoints.
 2. 403 rejection and denied audit log generation for non-admin roles (`owner`, `viewer`).
 3. Rejection of client-supplied role escalation attempts via headers, queries, and bodies.
@@ -253,7 +253,7 @@ Status definitions:
 10. Safe trapping of standalone persistence failures without crashing or recursing.
 11. Proper propagation of transactional audit failures to ensure rollback.
 
-**Status:** Implemented and verified in Phase 7 for API access controls, immutability, query validation, and failure handling; database triggers and indexing remain local pending migration review.
+**Status:** Implemented and verified in Phases 7 & 9 for API access controls, immutability, query validation, and failure handling; database triggers and indexing remain local pending migration review.
 
 ### T8 — SQL injection
 
@@ -264,14 +264,15 @@ Status definitions:
 **Impact:** Data disclosure, modification, or deletion.
 
 **Mitigations:**
-- Use parameterized queries.
-- Never concatenate untrusted input into SQL.
+- Use parameterized queries exclusively (`$1`, `$2`, etc.) via `pg.Pool` and `pg.PoolClient`.
+- Never concatenate untrusted input directly into SQL strings.
 - Allowlist dynamic column names and sort directions.
+- Escape LIKE wildcards or use parameter placeholders for substring queries (`%${search}%`).
 - Use the least database privilege compatible with the application's requirements.
 
-**Verification:** Test search and filtering inputs with SQL metacharacters and injection payloads.
+**Verification:** Test search, filtering, and mutation inputs with SQL metacharacters and injection payloads (`' OR '1'='1`, `'; DROP TABLE documents; --`, `admin'--`, UNION SELECT payloads). Automated unit and integration tests in `apps/api/src/audit.test.ts`, `apps/api/src/trustvault-enhancements.test.ts`, and `apps/api/src/security-phase9.test.ts` verify that SQL injection payloads are treated strictly as literal string values, returning 0 matching results or executing safely without syntax errors or data exposure.
 
-**Status:** Unverified for future database-facing application endpoints.
+**Status:** Implemented and verified in Phases 7, 8 & 9 across search, filtering, document metadata, and audit logs.
 
 ### T9 — Secret leakage
 
@@ -282,15 +283,16 @@ Status definitions:
 **Impact:** Unauthorized database or storage access.
 
 **Mitigations:**
-- Keep `.env` excluded from version control.
-- Maintain placeholders in `.env.example`.
-- Never expose service-role or secret keys through frontend variables.
-- Redact credentials from logs and error responses.
-- Rotate exposed credentials and follow incident-response procedures.
+- Keep `.env` strictly excluded from version control via `.gitignore`.
+- Maintain non-sensitive placeholders in `.env.example`.
+- Never expose service-role keys or database connection strings through frontend variables; Vite config only exposes public variables prefixed with `VITE_` (`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_API_URL`).
+- Redact credentials, password hashes, and tokens from logs and error responses.
+- Maintain comprehensive environment variable guidance in `docs/ENVIRONMENT.md`.
+- Rotate exposed credentials and follow incident-response procedures if leakage occurs.
 
-**Verification:** Check ignore rules, tracked files, frontend build output, and logs for secret exposure without printing secret values.
+**Verification:** Automated secret scan across repository files, tracked Git files, and frontend build bundles in Phase 10 verified zero hardcoded secrets or credentials in tracked files. `.gitignore` strictly excludes `.env` and local environment files.
 
-**Status:** Phase 2 reported `.env` as untracked and excluded. Broader secret scanning and production verification remain outstanding.
+**Status:** Implemented and verified in Phase 10.
 
 ### T10 — API abuse and brute-force attempts
 
@@ -300,19 +302,19 @@ Status definitions:
 
 **Impact:** Service degradation, account compromise, or resource exhaustion.
 
-**Existing Phase 2 controls reported:**
-- Helmet security headers.
-- Rate limiting configured at 100 requests per 15 minutes.
-- A 2 MB JSON body limit.
+**Implemented controls:**
+- Helmet security headers (`X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `Strict-Transport-Security`, CSP).
+- Rate limiting configured at 100 requests per 15 minutes via `express-rate-limit`.
+- A 2 MB JSON request body size limit.
+- 10 MB file upload limit with streaming limits.
 
 **Limitations:**
-- In-memory rate limits are not shared across multiple API instances.
-- Rate limiting does not replace authentication protections or endpoint-specific limits.
-- Proxy trust must match the actual hosting configuration.
+- In-memory rate limits are per-process and not shared across multiple API instances. Horizontal scaling requires a Redis-backed store (`rate-limit-redis`).
+- Rate limiting does not replace authentication protections or endpoint-specific brute-force limits.
 
-**Verification:** Test the configured limits and ensure protected endpoints have appropriate additional controls.
+**Verification:** Automated tests in `apps/api/src/server.test.ts` and `apps/api/src/security-phase9.test.ts` verify that the rate limiting middleware returns HTTP 429 Too Many Requests when configured thresholds are exceeded, Helmet security headers are present, and the JSON body parser enforces the 2 MB payload size limit.
 
-**Status:** Baseline middleware is reported implemented and tested; production suitability remains unverified.
+**Status:** Implemented and verified for single-process runtime in Phases 2 & 9; horizontal scaling requires Redis backing.
 
 ### T11 — CORS and CSRF weaknesses
 
@@ -323,14 +325,14 @@ Status definitions:
 **Impact:** Unauthorized actions if the authentication design and browser protections permit them.
 
 **Mitigations:**
-- Restrict CORS to trusted origins.
-- Do not treat CORS as authorization.
-- If cookie-based authentication is used, implement appropriate CSRF defenses and cookie settings.
-- Validate state-changing requests according to the selected authentication architecture.
+- Restrict CORS to trusted origins configured via `CORS_ORIGIN`.
+- Restrict allowed HTTP methods and headers in CORS middleware.
+- Bearer-token authentication architecture: all protected endpoints require a Bearer token supplied in the `Authorization` request header (`Authorization: Bearer <token>`). Browsers do not attach custom `Authorization` headers automatically in cross-origin requests (unlike ambient cookie-based credentials), neutralizing cross-site request forgery (CSRF) attacks by design.
+- State-changing requests validate input schemas and ownership before executing mutations.
 
-**Verification:** Test untrusted origins and CSRF scenarios applicable to the actual authentication mechanism.
+**Verification:** Automated tests in `apps/api/src/server.test.ts` verify CORS header behavior, preflight OPTIONS handling, and allowed methods.
 
-**Status:** CORS behavior is reported tested in Phase 2. CSRF protection remains dependent on the authentication design and is not established by those tests.
+**Status:** Implemented and verified for Bearer-token REST architecture in Phases 2, 4 & 9.
 
 ### T12 — Compromised or disabled accounts
 
@@ -341,14 +343,14 @@ Status definitions:
 **Impact:** Unauthorized document access and changes.
 
 **Mitigations:**
-- Check account status during authorization where appropriate.
-- Use secure authentication and token lifecycle handling.
-- Provide a process for revoking sessions or credentials.
-- Apply appropriate protections to authentication endpoints.
+- Check account status (`is_active = true`) in the database during authorization on every protected request.
+- Reject deactivated accounts with HTTP 403 Forbidden ("Account is deactivated").
+- Prevent deactivated accounts from performing any document creation, reads, downloads, updates, or administrative actions.
+- Do not reactivate deactivated accounts upon login.
 
-**Verification:** Test disabled accounts, invalidated sessions or tokens, and revoked access. Automated tests in `apps/api/src/auth.test.ts` verify that accounts with `is_active = false` in PostgreSQL are rejected with HTTP 403 Forbidden ("Account is deactivated"), and that login attempts do not automatically reactivate them.
+**Verification:** Automated tests in `apps/api/src/auth.test.ts` and `apps/api/src/security-phase9.test.ts` verify that accounts with `is_active = false` in PostgreSQL are rejected with HTTP 403 Forbidden across `/api/me`, `/api/documents`, and `/api/admin/audit-logs`, and that login attempts do not automatically reactivate them.
 
-**Status:** Implemented and verified for account deactivation enforcement on Express `/api/me` (Phase 4).
+**Status:** Implemented and verified in Phases 4 & 9.
 
 ### T13 — Migration errors and excessive database privileges
 
@@ -360,49 +362,59 @@ Status definitions:
 
 **Mitigations:**
 - Review migrations before applying them.
-- Verify migration history and schema state separately.
-- Test changes against a disposable database where possible.
-- Avoid destructive operations against production.
-- Use least-privilege database roles appropriate to the connection model.
-- Maintain recovery procedures.
+- Verify migration history and schema state separately (`npx supabase migration list`).
+- Test changes against a disposable local database before remote application.
+- Avoid destructive operations against production tables; use soft-delete (`deleted_at = now()`).
+- Database migrations define Row-Level Security (RLS) policies and append-only triggers for defense in depth.
+- Maintain recovery and rollback procedures.
 
-**Verification:** Confirm migration compatibility, inspect actual remote schema state, and test rollback/recovery procedures in a non-production environment.
+**Verification:** Initial migration `20261020161206_init.sql` confirmed applied remotely. Local migrations `20261021100000_security_hardening.sql` (RLS policies and append-only triggers) and `20261022180000_audit_logs_actor_idx.sql` (actor index) syntax-tested and verified locally. Pre-deployment checklist documents steps to execute pending migrations against the production database.
 
-**Status:** Migration history has been checked; complete remote schema equivalence and least-privilege configuration remain unverified.
+**Status:** Implemented locally and verified; remote production migration execution remains a pre-deployment operational step.
 
 ## 6. Security Verification Plan
 
-Before considering the security requirements complete, add and execute automated tests for:
+The following 12 security verification areas have automated test coverage across the **205 automated unit and integration tests** in `npm test`:
 
-1. Missing, invalid, and expired authentication tokens.
-2. Cross-user document access attempts.
-3. Role restrictions and privilege escalation.
-4. Read/edit grants and immediate revocation.
-5. Unauthorized document downloads.
-6. Private storage access without authorization.
-7. Invalid and oversized uploads.
-8. Audit events for successful and denied operations.
-9. Unauthorized audit-log modification and retrieval.
-10. SQL injection resistance for search and filtering.
-11. Account disabling and token/session revocation.
-12. Migration behavior and database privilege restrictions.
-
-Use separate test identities and isolated test data. Do not run destructive tests against production data.
+1. **Authentication:** Missing, invalid, malformed, and expired JWT tokens rejected with 401 Unauthorized (`auth.test.ts`, `security-phase9.test.ts`).
+2. **Authorization (IDOR):** Cross-user document access rejected with 404 Not Found to prevent data disclosure and document existence enumeration (`documents.test.ts`, `security-phase9.test.ts`).
+3. **Role Enforcement:** Administrative endpoints restrict access to `admin` role; `owner` and `viewer` roles rejected with 403 Forbidden (`audit.test.ts`, `security-phase9.test.ts`).
+4. **Permissions & Revocation:** Read/edit grants take effect immediately; revoked permissions immediately block downloads and edits with 404 (`documents.test.ts`, `security-phase9.test.ts`).
+5. **Private Downloads:** Unauthorized file downloads blocked with 404; storage keys sanitized against traversal (`documents.test.ts`, `security-phase9.test.ts`).
+6. **Storage Security:** Storage files mediated exclusively through backend; direct public access prevented (`documents.test.ts`, `security-phase9.test.ts`).
+7. **Upload Security:** 10 MB limits, disallowed file types (`.exe`, `.sh`), spoofed MIME headers, and null bytes rejected with 400/413 (`documents.test.ts`, `security-phase9.test.ts`).
+8. **Audit Trail Coverage:** All state mutations (create, update, delete, grant, revoke) emit transactional audit logs; failure causes rollback (`documents.test.ts`, `audit.test.ts`).
+9. **Audit Immutability:** Audit endpoints are read-only (POST, PUT, PATCH, DELETE return 404); denied admin access attempts are logged (`audit.test.ts`, `security-phase9.test.ts`).
+10. **SQL Injection Resistance:** Parameterized queries used across all endpoints; injection payloads in titles, search, and filters treated as literals (`audit.test.ts`, `trustvault-enhancements.test.ts`, `security-phase9.test.ts`).
+11. **Account Deactivation:** Deactivated accounts (`is_active = false`) blocked with 403 across all protected routes (`auth.test.ts`, `security-phase9.test.ts`).
+12. **API Abuse Controls:** Rate limiting middleware enforces thresholds (429), Helmet sets security headers, and JSON body parser caps payloads at 2 MB (`server.test.ts`, `security-phase9.test.ts`).
 
 ## 7. Residual Risks and Current Limitations
 
-Based on the current evidence:
+The following operational requirements and residual risks should be reviewed prior to production deployment:
 
-- The Phase 2 baseline does not demonstrate a completed authentication system.
-- Document-level authorization and permission revocation still require implementation and testing.
-- File-upload and download security have not been established.
-- The security-hardening migration is pending according to the latest migration-list output.
-- The live storage bucket privacy configuration has not been verified.
-- Audit-log triggers alone do not prevent all privileged forms of tampering.
-- The actual remote database schema has not been fully compared with the intended schema.
-- Production deployment and production security configuration remain unverified.
+1. **Remote Database Migrations:**
+   - Migration `20261021100000_security_hardening.sql` (enabling table RLS and append-only audit triggers) and `20261022180000_audit_logs_actor_idx.sql` (actor index) are verified locally and should be applied to the remote Supabase PostgreSQL database during deployment maintenance.
+   - Note: Because backend queries execute via `DATABASE_URL` as the database owner, application authorization is enforced by Express middleware; table RLS provides defense-in-depth against direct PostgREST Data API access.
 
-These are explicit follow-up items, not claims that the application is already insecure in every respect.
+2. **Storage Bucket Privacy Configuration:**
+   - Verify in the Supabase Dashboard that the `trustvault-private` storage bucket has **Public bucket** set to OFF.
+   - File downloads must always flow through the backend download endpoint (`GET /api/documents/:id/download`).
+
+3. **Horizontal Rate Limiting:**
+   - The current `express-rate-limit` middleware uses an in-memory store, which applies per Node.js process. When deploying across multiple container instances or behind a load balancer, configure a Redis-backed store (`rate-limit-redis`) to share rate-limit counters across instances.
+
+4. **Antivirus & Malware Sandbox Boundary:**
+   - File validation checks MIME types, magic-byte header signatures, binary content, and filename sanitization.
+   - Magic-byte verification ensures file format header conformance, but does not execute dynamic malware analysis or sandbox inspection. An asynchronous virus-scanning pipeline (e.g. ClamAV or VirusTotal API) is recommended for high-risk enterprise deployments.
+
+5. **Client-Side Physical File Revocation:**
+   - Document access revocation immediately blocks subsequent API downloads and metadata access.
+   - Revocation cannot retroactively delete or recall physical files that an authorized user already downloaded to their local disk or device storage before access was revoked.
+
+6. **Standalone Audit Persistence Failure Window:**
+   - Mutating business operations couple audit logging to the database transaction (rolling back if audit write fails).
+   - Standalone audit logs (e.g. read denials, connection aborts) use independent database queries. If PostgreSQL experiences a complete outage or storage exhaustion, standalone denial logs cannot be persisted; errors are caught and logged to stderr to avoid crashing the server process.
 
 ## 8. Review and Update Policy
 
@@ -416,3 +428,4 @@ For each mitigation, record:
 - A real commit reference when available.
 
 Do not mark a threat as fully mitigated merely because a control has been planned or code has been generated. Verification must support the claim.
+

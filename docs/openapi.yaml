@@ -1,0 +1,634 @@
+openapi: 3.0.3
+info:
+  title: TrustVault API
+  description: >
+    Secure document sharing with per-document authorization and an auditable access trail.
+    All protected endpoints require Bearer JWT authentication verified against Supabase Auth.
+  version: 1.0.0
+servers:
+  - url: http://localhost:4000
+    description: Local Development Server
+  - url: /
+    description: Current Host Relative Base
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Supabase Auth access token
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters or body.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Authentication token missing, expired, or malformed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Document not found or unauthorized non-disclosure response.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    UserProfile:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        full_name:
+          type: string
+          nullable: true
+        role:
+          type: string
+          enum: [user, admin, owner, viewer]
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    DocumentItem:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        owner_id:
+          type: string
+          format: uuid
+        owner_email:
+          type: string
+          format: email
+        owner_name:
+          type: string
+          nullable: true
+        title:
+          type: string
+        category:
+          type: string
+        description:
+          type: string
+          nullable: true
+        mime_type:
+          type: string
+        size_bytes:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        shared_at:
+          type: string
+          format: date-time
+          nullable: true
+        access_level:
+          type: string
+          enum: [owner, edit, read]
+
+    DocumentPermission:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        document_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        user_email:
+          type: string
+          format: email
+        permission:
+          type: string
+          enum: [read, edit]
+        granted_by:
+          type: string
+          format: uuid
+        granted_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    AuditLogItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        actor_id:
+          type: string
+          format: uuid
+          nullable: true
+        actor_email:
+          type: string
+          nullable: true
+        actor_name:
+          type: string
+          nullable: true
+        document_id:
+          type: string
+          format: uuid
+          nullable: true
+        document_title:
+          type: string
+          nullable: true
+        action:
+          type: string
+        outcome:
+          type: string
+          enum: [success, denied, failure]
+        details:
+          type: object
+        created_at:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+
+paths:
+  /health:
+    get:
+      summary: Health and Liveness Check
+      description: Returns service liveness and database connection status.
+      responses:
+        '200':
+          description: Service and database are healthy.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  timestamp:
+                    type: string
+                    format: date-time
+        '503':
+          description: Database is unreachable.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: degraded
+                  timestamp:
+                    type: string
+                  error:
+                    type: string
+
+  /api/me:
+    get:
+      summary: Get Authenticated User Profile
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: User profile retrieved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/components/schemas/UserProfile'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Account is deactivated.
+    patch:
+      summary: Update User Profile
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - full_name
+              properties:
+                full_name:
+                  type: string
+                  maxLength: 100
+      responses:
+        '200':
+          description: User profile updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/components/schemas/UserProfile'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/documents:
+    get:
+      summary: List Accessible Documents
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+          description: Search term across title, category, description, and owner
+        - name: view
+          in: query
+          schema:
+            type: string
+            enum: [all, owned, shared]
+          description: Document scope filter
+      responses:
+        '200':
+          description: List of documents.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  documents:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DocumentItem'
+    post:
+      summary: Upload Document or Create Metadata
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - category
+              properties:
+                file:
+                  type: string
+                  format: binary
+                title:
+                  type: string
+                  maxLength: 200
+                category:
+                  type: string
+                  maxLength: 100
+                description:
+                  type: string
+                  maxLength: 1000
+      responses:
+        '201':
+          description: Document uploaded and created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  document:
+                    $ref: '#/components/schemas/DocumentItem'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '413':
+          description: File size exceeds 10 MB limit.
+
+  /api/documents/{id}:
+    get:
+      summary: Get Document Details
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Document metadata.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  document:
+                    $ref: '#/components/schemas/DocumentItem'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      summary: Update Document Metadata
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                  maxLength: 200
+                category:
+                  type: string
+                  maxLength: 100
+                description:
+                  type: string
+                  maxLength: 1000
+      responses:
+        '200':
+          description: Document metadata updated.
+        '403':
+          description: Read-only users cannot edit metadata.
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      summary: Delete Document (Owner Only)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Document deleted.
+        '403':
+          description: Only the document owner can delete this document.
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/documents/{id}/download:
+    get:
+      summary: Download Document Binary
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: File stream from private object storage.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/documents/{id}/permissions:
+    get:
+      summary: List Document Permissions (Owner Only)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Active permissions list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  permissions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DocumentPermission'
+        '403':
+          description: Non-owners cannot view permissions.
+    post:
+      summary: Grant Permission (Owner Only)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - permission
+              properties:
+                user_id:
+                  type: string
+                  format: uuid
+                email:
+                  type: string
+                  format: email
+                permission:
+                  type: string
+                  enum: [read, edit]
+      responses:
+        '201':
+          description: Permission granted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  permission:
+                    $ref: '#/components/schemas/DocumentPermission'
+        '409':
+          description: Active permission grant already exists for user.
+
+  /api/documents/{id}/permissions/{userId}:
+    delete:
+      summary: Revoke Permission (Owner Only)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Permission revoked immediately.
+        '403':
+          description: Non-owners cannot revoke permissions.
+    patch:
+      summary: Update Permission Level (Owner Only)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - permission
+              properties:
+                permission:
+                  type: string
+                  enum: [read, edit]
+      responses:
+        '200':
+          description: Permission updated.
+
+  /api/documents/activity:
+    get:
+      summary: Activity Logs for Owned Documents
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: document_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: Activity logs.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  logs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AuditLogItem'
+
+  /api/admin/audit-logs:
+    get:
+      summary: Global Audit Logs (Admin Only)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: actor_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: document_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: action
+          in: query
+          schema:
+            type: string
+        - name: outcome
+          in: query
+          schema:
+            type: string
+            enum: [success, denied, failure]
+        - name: start_date
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: end_date
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Global audit logs with pagination metadata.
+        '403':
+          description: Only administrators can access audit logs.

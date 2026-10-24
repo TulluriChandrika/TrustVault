@@ -109,7 +109,12 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
 
   const { title, subtitle } = getHeaderTitle(currentView);
   const displayName = profile?.full_name || profile?.email || "User";
-  const displayRole = profile?.role === "admin" ? "Administrator" : "User";
+  const displayRole =
+    profile?.role === "admin"
+      ? "Administrator"
+      : profile?.role === "viewer"
+        ? "Viewer"
+        : "Document Owner";
   const userInitial = displayName.charAt(0).toUpperCase();
 
   return (
@@ -159,14 +164,16 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           )}
         </div>
 
-        {/* Quick Upload Button */}
-        <button
-          onClick={onOpenUpload}
-          className="h-9 px-3.5 rounded-lg bg-gradient-to-r from-[#7074EE] to-[#605BEB] hover:from-[#666AE8] hover:to-[#5550E0] text-white text-xs font-semibold shadow-sm shadow-[#6153CC]/25 flex items-center gap-1.5 shrink-0 active:scale-[0.98] transition-all"
-        >
-          <UploadCloud className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">Upload</span>
-        </button>
+        {/* Quick Upload Button (Restricted: Viewers cannot upload) */}
+        {profile?.role !== "viewer" && (
+          <button
+            onClick={onOpenUpload}
+            className="h-9 px-3.5 rounded-lg bg-gradient-to-r from-[#7074EE] to-[#605BEB] hover:from-[#666AE8] hover:to-[#5550E0] text-white text-xs font-semibold shadow-sm shadow-[#6153CC]/25 flex items-center gap-1.5 shrink-0 active:scale-[0.98] transition-all"
+          >
+            <UploadCloud className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Upload</span>
+          </button>
+        )}
 
         {/* User Profile Menu Dropdown */}
         <div className="relative" ref={menuRef}>

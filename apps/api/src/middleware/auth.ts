@@ -2,11 +2,13 @@ import { Request, Response, NextFunction } from "express";
 import { pool } from "../db/pool.js";
 import { getSupabaseAdmin } from "../supabase.js";
 
+export type GlobalRole = "admin" | "owner" | "viewer" | "user";
+
 export interface AuthenticatedUser {
   id: string;
   email: string;
   full_name?: string | null;
-  role: "admin" | "user" | "owner" | "viewer";
+  role: GlobalRole;
   is_active: boolean;
   created_at: string;
 }
@@ -81,12 +83,12 @@ export async function requireAuth(
 
   try {
     // Idempotent user provisioning:
-    // 1. If user doesn't exist, insert with default role 'user' and is_active = true.
+    // 1. If user doesn't exist, insert with canonical default role 'viewer' and is_active = true.
     // 2. If user already exists, update email and full_name in case it changed in Supabase Auth,
     //    WITHOUT touching the existing role or is_active status (prevents privilege escalation).
     const query = `
       INSERT INTO public.users (id, email, full_name, password_hash, role, is_active)
-      VALUES ($1, $2, $3, 'SUPABASE_AUTH_MANAGED', 'user', true)
+      VALUES ($1, $2, $3, 'SUPABASE_AUTH_MANAGED', 'viewer', true)
       ON CONFLICT (id) DO UPDATE
       SET email = EXCLUDED.email,
           full_name = COALESCE(public.users.full_name, EXCLUDED.full_name)
