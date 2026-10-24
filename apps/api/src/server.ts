@@ -41,7 +41,7 @@ app.use(
 // Parse JSON request bodies (limit protects against oversized payloads)
 app.use(express.json({ limit: "2mb" }));
 
-// CORS — allow configured frontend origin, localhost, and 127.0.0.1
+// CORS — allow configured frontend origin, Vercel deployments, localhost, and 127.0.0.1
 const allowedOrigins = new Set([
   FRONTEND_ORIGIN,
   "http://localhost:5173",
@@ -51,16 +51,34 @@ const allowedOrigins = new Set([
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (such as curl, mobile, or server-to-server)
+      // Allow requests with no origin (such as curl, mobile, server-to-server, or same-origin)
       if (!origin || allowedOrigins.has(origin)) {
         callback(null, true);
-      } else {
-        callback(null, false);
+        return;
       }
+      try {
+        const parsed = new URL(origin);
+        // Allow any Vercel domain (*.vercel.app) or localhost
+        if (
+          parsed.hostname.endsWith(".vercel.app") ||
+          parsed.hostname === "localhost" ||
+          parsed.hostname === "127.0.0.1"
+        ) {
+          callback(null, true);
+          return;
+        }
+      } catch {
+        // invalid URL format
+      }
+      callback(null, false);
     },
     credentials: true,
   })
 );
+
+app.get("/", (_req, res) => {
+  res.json({ status: "ok", service: "TrustVault API", version: "0.1.0" });
+});
 
 // ---------------------------------------------------------------------------
 // Health check — unauthenticated, used for uptime monitoring
@@ -133,8 +151,17 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 // Server startup and graceful shutdown
 // ---------------------------------------------------------------------------
 if (process.env.NODE_ENV !== "test") {
-  const server = app.listen(PORT, () => {
-    console.log(`TrustVault API listening on http://localhost:${PORT}`);
+  process.on("uncaughtException", (err) => {
+    console.error("FATAL: Uncaught Exception during startup or execution:", err);
+  });
+
+  process.on("unhandledRejection", (reason) => {
+    console.error("FATAL: Unhandled Promise Rejection:", reason);
+  });
+
+  const HOST = "0.0.0.0";
+  const server = app.listen(PORT, HOST, () => {
+    console.log(`TrustVault API listening on http://${HOST}:${PORT}`);
     console.log(`  CORS origin: ${FRONTEND_ORIGIN}`);
     console.log(`  Environment: ${process.env.NODE_ENV || "development"}`);
   });

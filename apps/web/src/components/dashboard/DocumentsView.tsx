@@ -484,7 +484,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                             <div className="text-[10px] text-[#8A93B6] truncate mt-0.5">
                               {isOwner
                                 ? `Owner: You • ${doc.mime_type || "application/octet-stream"}`
-                                : `Owner: ${doc.owner_email || doc.owner_name || "Authorized User"}${
+                                : `Owner: ${doc.owner_email || doc.owner_name || (doc.owner_id ? "Deleted User" : "Authorized User")}${
                                     doc.shared_at ? ` • Shared on ${new Date(doc.shared_at).toLocaleDateString()}` : ""
                                   }`}
                             </div>
@@ -648,7 +648,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                       <p className="text-[11px] text-[#8A93B6] truncate mt-1">
                         {isOwner
                           ? `Size: ${formatFileSize(doc.size_bytes)}`
-                          : `Owner: ${doc.owner_email || doc.owner_name || "Authorized User"} • ${formatFileSize(doc.size_bytes)}`}
+                          : `Owner: ${doc.owner_email || doc.owner_name || (doc.owner_id ? "Deleted User" : "Authorized User")} • ${formatFileSize(doc.size_bytes)}`}
                       </p>
                     </div>
                   </div>

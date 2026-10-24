@@ -211,7 +211,7 @@ export async function downloadDocument(
 
   const contentDisposition = res.headers.get("content-disposition") || "";
   let filename = `document-${documentId}`;
-  
+
   // Parse RFC 5987 filename*=UTF-8''... or standard filename="..."
   const rfc5987Match = contentDisposition.match(/filename\*=UTF-8''([^;\n]+)/i);
   if (rfc5987Match && rfc5987Match[1]) {

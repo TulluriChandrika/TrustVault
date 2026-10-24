@@ -307,8 +307,8 @@ export const AuditLogsView: React.FC<AuditLogsViewProps> = ({ token, profile }) 
                   const actorDisplay = log.actor_email
                     ? `${log.actor_email}${isCurrentActor ? " (You)" : ""}`
                     : log.actor_id
-                    ? `${log.actor_id.slice(0, 8)}...${isCurrentActor ? " (You)" : ""}`
-                    : "System";
+                      ? `Deleted User (${log.actor_id.slice(0, 8)}...)${isCurrentActor ? " (You)" : ""}`
+                      : "Unknown Actor / System";
 
                   return (
                     <tr key={log.id} className="hover:bg-[#FBFBFE]/70 transition-colors">

@@ -228,7 +228,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                               {doc.title}
                             </div>
                             <div className="text-[10px] text-[#8A93B6] truncate mt-0.5">
-                              {isOwner ? "Owner: You" : `Owner: ${doc.owner_email || "Authorized User"}`}
+                              {isOwner ? "Owner: You" : `Owner: ${doc.owner_email || doc.owner_name || (doc.owner_id ? "Deleted User" : "Authorized User")}`}
                             </div>
                           </div>
                         </div>
@@ -242,11 +242,10 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
 
                       <td className="py-3.5 px-4">
                         <span
-                          className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-semibold capitalize ${
-                            isOwner
+                          className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-semibold capitalize ${isOwner
                               ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
                               : "bg-sky-50 text-sky-700 border border-sky-200"
-                          }`}
+                            }`}
                         >
                           <Lock className="h-2.5 w-2.5" />
                           <span>{doc.access_level}</span>

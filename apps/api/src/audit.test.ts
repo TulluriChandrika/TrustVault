@@ -809,4 +809,86 @@ describe("Phase 7: Administrative Audit APIs & Access Control", () => {
       ).rejects.toThrow("Audit trigger constraint violation");
     });
   });
+
+  describe("7. Historical Audit Logs With Null or Deleted Actors", () => {
+    it("safely retrieves audit logs where actor_id is null or user record was deleted", async () => {
+      mockAuthAs({ id: ADMIN_ID, email: "admin@trustvault.local", role: "admin" });
+
+      // Mock COUNT(*)
+      mockQuery.mockResolvedValueOnce({ rows: [{ total: "2" }] });
+
+      // Mock data query returning historical logs with deleted actor and null actor
+      mockQuery.mockResolvedValueOnce({
+        rows: [
+          {
+            id: "201",
+            actor_id: "99999999-9999-4999-8999-999999999999",
+            actor_email: null, // User deleted from public.users
+            actor_name: null,
+            document_id: DOC_ID,
+            document_title: "deleted_user_doc.pdf",
+            action: "file:upload",
+            outcome: "success",
+            details: {},
+            created_at: "2026-10-20T10:00:00Z",
+          },
+          {
+            id: "202",
+            actor_id: null, // System or unauthenticated actor
+            actor_email: null,
+            actor_name: null,
+            document_id: null,
+            document_title: null,
+            action: "system:cleanup",
+            outcome: "success",
+            details: { cleanup_type: "orphaned_chunks" },
+            created_at: "2026-10-20T11:00:00Z",
+          },
+        ],
+      });
+
+      const res = await request(app)
+        .get("/api/admin/audit-logs")
+        .set("Authorization", "Bearer admin-token");
+
+      expect(res.status).toBe(200);
+      expect(res.body.audit_logs).toHaveLength(2);
+      expect(res.body.audit_logs[0].id).toBe("201");
+      expect(res.body.audit_logs[0].actor_id).toBe("99999999-9999-4999-8999-999999999999");
+      expect(res.body.audit_logs[0].actor_email).toBeNull();
+      expect(res.body.audit_logs[1].id).toBe("202");
+      expect(res.body.audit_logs[1].actor_id).toBeNull();
+    });
+
+    it("safely retrieves single audit log entry by ID when actor was deleted", async () => {
+      mockAuthAs({ id: ADMIN_ID, email: "admin@trustvault.local", role: "admin" });
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [
+          {
+            id: "201",
+            actor_id: "99999999-9999-4999-8999-999999999999",
+            actor_email: null,
+            actor_name: null,
+            document_id: DOC_ID,
+            document_title: "deleted_user_doc.pdf",
+            action: "file:upload",
+            outcome: "success",
+            details: {},
+            created_at: "2026-10-20T10:00:00Z",
+          },
+        ],
+      });
+
+      const res = await request(app)
+        .get("/api/admin/audit-logs/201")
+        .set("Authorization", "Bearer admin-token");
+
+      expect(res.status).toBe(200);
+      expect(res.body.audit_log.id).toBe("201");
+      expect(res.body.audit_log.actor_id).toBe("99999999-9999-4999-8999-999999999999");
+      expect(res.body.audit_log.actor_email).toBeNull();
+    });
+  });
 });
+
