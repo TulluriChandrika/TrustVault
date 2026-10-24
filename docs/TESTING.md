@@ -45,7 +45,7 @@ npx vitest run src/auth.test.ts --root apps/api
 
 ## 3. Test Suites Organization
 
-The test suite consists of **7 test files** comprising **205 automated tests**:
+The test suite consists of **9 test files** comprising **240 automated tests**:
 
 ```
 apps/api/src/
@@ -54,6 +54,8 @@ apps/api/src/
 ├── server.test.ts                # 10 tests: Server bootstrap, health endpoint, rate limiting, error handling
 ├── trustvault-enhancements.test.ts# 19 tests: Global search, descriptions, custom categories, profile sync
 ├── security-phase9.test.ts       # 20 tests: Security regression, permissions, revocations, overflow menu
+├── judge-roles.test.ts           # 22 tests: Global role model (admin, owner, viewer, legacy user), header injection immunity
+├── seed-judge-accounts.test.ts   # 13 tests: Independent demo account password validation & seeding logic
 ├── audit.test.ts                 # 44 tests: Administrative audit logs, pagination, date & UUID filters
 └── documents.test.ts             # 86 tests: File uploads, downloads, sharing, permissions, rollbacks
 ```

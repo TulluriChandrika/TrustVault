@@ -1,0 +1,50 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Typecheck, Build, and Automated Tests
+    runs-on: ubuntu-latest
+
+    env:
+      NODE_ENV: test
+      CI: true
+      PORT: 4000
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/trustvault_test
+      SESSION_SECRET: test-session-secret-for-isolated-ci-runs-only
+      SUPABASE_URL: https://mock-test-project.supabase.co
+      SUPABASE_SECRET_KEY: mock-test-service-role-key-never-used-in-production
+      VITE_SUPABASE_URL: https://mock-test-project.supabase.co
+      VITE_SUPABASE_ANON_KEY: mock-test-anon-key-never-used-in-production
+      VITE_API_URL: http://localhost:4000
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - name: Install dependencies (clean install)
+        run: npm ci
+
+      - name: Run TypeScript typecheck
+        run: npm run typecheck
+
+      - name: Run production build (API + Web Vite)
+        run: npm run build
+
+      - name: Run automated test suites (Vitest)
+        run: npm test

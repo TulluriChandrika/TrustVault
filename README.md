@@ -7,7 +7,7 @@
 [![Express](https://img.shields.io/badge/Express-5-green.svg)](https://expressjs.com/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15%2B-336791.svg)](https://www.postgresql.org/)
 [![Supabase](https://img.shields.io/badge/Supabase-Auth%20%26%20Storage-3ecf8e.svg)](https://supabase.com/)
-[![Vitest](https://img.shields.io/badge/Vitest-205%20Tests%20Passed-yellow.svg)](https://vitest.dev/)
+[![Vitest](https://img.shields.io/badge/Vitest-240%20Tests%20Passed-yellow.svg)](https://vitest.dev/)
 
 ---
 
